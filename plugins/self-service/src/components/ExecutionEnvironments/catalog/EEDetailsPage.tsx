@@ -34,7 +34,7 @@ import { ReadmeCard } from './ReadmeCard';
 import { DefinedContentCard } from './DefinedContentCard';
 import { ResourcesCard } from './ResourcesCard';
 import { EntityNotFound } from './EntityNotFound';
-import { createTarArchive } from '../../utils/tarArchiveUtils';
+import { toEEDefinitionUrl, downloadEntityAsTarArchive } from './helpers';
 import { parseEEDefinition } from '../../../utils/eeDefinitionUtils';
 
 const useActionsMenuStyles = makeStyles(theme => ({
@@ -190,7 +190,7 @@ export const EEDetailsPage: React.FC = () => {
     let subdir = '';
     let ref = 'main';
 
-    if (scmProvider === 'github') {
+    if (scm?.toLowerCase().includes('github')) {
       const treeIndex = parts.indexOf('tree');
       if (treeIndex !== -1 && parts.length > treeIndex + 1) {
         ref = parts[treeIndex + 1];
@@ -198,7 +198,7 @@ export const EEDetailsPage: React.FC = () => {
       } else {
         subdir = parts.slice(2).join('/');
       }
-    } else if (scmProvider === 'gitlab') {
+    } else if (scm?.toLowerCase().includes('gitlab')) {
       const treeIndex = parts.indexOf('tree');
       if (treeIndex !== -1 && parts.length > treeIndex + 1) {
         ref = parts[treeIndex + 1];
@@ -215,7 +215,7 @@ export const EEDetailsPage: React.FC = () => {
 
   useEffect(() => {
     const fetchDefaultReadme = async () => {
-      if (entity && !entity?.spec?.readme) {
+      if (!entity?.spec?.readme) {
         const params = parseSourceLocationParams();
         if (!params) return;
 
@@ -287,8 +287,11 @@ export const EEDetailsPage: React.FC = () => {
     const loc = entity?.metadata?.annotations?.['backstage.io/source-location'];
     if (!loc) return null;
 
-    const url = loc.replace(/^url:/, '');
-    window.open(url, '_blank');
+    const url = toEEDefinitionUrl(
+      loc.replace(/^url:/, '').trim(),
+      entity?.metadata?.name ?? '',
+    );
+    if (url) window.open(url, '_blank');
     return url;
   }, [entity]);
 
@@ -332,63 +335,7 @@ export const EEDetailsPage: React.FC = () => {
     : null;
 
   const handleDownloadArchive = () => {
-    if (
-      !entity?.spec?.definition ||
-      !entity?.spec?.readme ||
-      !entity?.spec?.ansible_cfg
-    ) {
-      // eslint-disable-next-line no-console
-      console.error('Entity, definition, readme or ansible_cfg not available');
-      return;
-    }
-
-    try {
-      const eeFileName = `${
-        entity.metadata.name || 'execution-environment'
-      }.yaml`;
-      const readmeFileName = `README-${
-        entity.metadata.name || 'execution-environment'
-      }.md`;
-      const archiveName = `${
-        entity.metadata.name || 'execution-environment'
-      }.tar`;
-      const ansibleCfgFileName = `ansible.cfg`;
-      const templateFileName = `${
-        entity.metadata.name || 'execution-environment'
-      }-template.yaml`;
-
-      const rawdata = [
-        { name: eeFileName, content: entity.spec.definition },
-        { name: readmeFileName, content: entity.spec.readme },
-        { name: ansibleCfgFileName, content: entity.spec.ansible_cfg },
-        { name: templateFileName, content: entity.spec.template },
-      ];
-
-      if (entity.spec.mcp_vars) {
-        const mcpVarsFileName = `mcp-vars.yaml`;
-        rawdata.push({
-          name: mcpVarsFileName,
-          content: entity.spec.mcp_vars,
-        });
-      }
-      const tarData = createTarArchive(rawdata);
-
-      const blob = new Blob([tarData as BlobPart], {
-        type: 'application/x-tar',
-      });
-
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = archiveName;
-      link.style.display = 'none';
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Failed to download archive:', err); // eslint-disable-line no-console
-    }
+    downloadEntityAsTarArchive(entity);
   };
 
   const handleRefresh = () => {

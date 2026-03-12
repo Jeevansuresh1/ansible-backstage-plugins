@@ -9,13 +9,27 @@ import {
   Link,
   Tooltip,
 } from '@material-ui/core';
-import { makeStyles } from '@material-ui/core/styles';
+import { makeStyles, useTheme } from '@material-ui/core/styles';
 import AutorenewIcon from '@material-ui/icons/Autorenew';
+import EditIcon from '@material-ui/icons/Edit';
 import OpenInNewIcon from '@material-ui/icons/OpenInNew';
 import React, { useState } from 'react';
 import { Entity } from '@backstage/catalog-model';
+import { getEntityEEDefinitionUrl } from './helpers';
 
 const useStyles = makeStyles(theme => ({
+  tagButton: {
+    borderRadius: 8,
+    borderColor: '#D3D3D3',
+    textTransform: 'none',
+  },
+  descriptionTruncate: {
+    display: '-webkit-box',
+    WebkitLineClamp: 4,
+    WebkitBoxOrient: 'vertical' as const,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
   rotate: {
     animation: '$spin 1s linear',
   },
@@ -117,6 +131,7 @@ export const AboutCard: React.FC<AboutCardProps> = ({
   onRefresh,
 }) => {
   const classes = useStyles();
+  const theme = useTheme();
   const [descriptionExpanded, setDescriptionExpanded] = useState(false);
   const scmProvider =
     entity?.metadata?.annotations?.['ansible.io/scm-provider']
@@ -150,6 +165,18 @@ export const AboutCard: React.FC<AboutCardProps> = ({
                   />
                 </IconButton>
               </Tooltip>
+              {getEntityEEDefinitionUrl(entity) && (
+                <IconButton
+                  size="small"
+                  component="a"
+                  href={getEntityEEDefinitionUrl(entity)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Edit definition"
+                >
+                  <EditIcon style={{ color: theme.palette.primary.main }} />
+                </IconButton>
+              )}
             </Box>
           )}
         </Box>
