@@ -167,6 +167,7 @@ export const HomeComponent = () => {
     { id: number; name: string }[]
   >([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [syncKey, setSyncKey] = useState(0);
   const [syncStatus, setSyncStatus] = useState<{
     orgsUsersTeams: { lastSync: string | null };
     jobTemplates: { lastSync: string | null };
@@ -190,6 +191,31 @@ export const HomeComponent = () => {
     setOpen(true);
   };
 
+  const fetchJobTemplates = useCallback(async (): Promise<
+    { id: number; name: string }[] | undefined
+  > => {
+    try {
+      const token = await rhAapAuthApi.getAccessToken();
+      if (scaffolderApi.autocomplete) {
+        const { results } = await scaffolderApi.autocomplete({
+          token,
+          resource: 'job_templates',
+          provider: 'aap-api-cloud',
+          context: {},
+        });
+        const newTemplates = results.map(result => ({
+          id: parseInt(result.id, 10),
+          name: result.title as string,
+        }));
+        setJobTemplates(newTemplates);
+        return newTemplates;
+      }
+    } finally {
+      setLoading(false);
+    }
+    return undefined;
+  }, [scaffolderApi, rhAapAuthApi]);
+
   const handleSync = useCallback(async () => {
     let result = false;
     setSnackbarMsg('Starting sync...');
@@ -210,13 +236,22 @@ export const HomeComponent = () => {
       if (result) {
         setSnackbarMsg('Templates synced successfully');
         fetchSyncStatus();
+        const newTemplates = await fetchJobTemplates();
+        const oldIds = new Set(jobTemplates.map(t => t.id));
+        const newIds = new Set(newTemplates?.map(t => t.id) ?? []);
+        const hasChanges =
+          oldIds.size !== newIds.size ||
+          [...newIds].some(id => !oldIds.has(id));
+        if (hasChanges) {
+          setSyncKey(prev => prev + 1);
+        }
       } else {
         setSnackbarMsg('Templates sync failed');
       }
       setShowSnackbar(true);
     }
     setSyncOptions([]);
-  }, [ansibleApi, syncOptions, fetchSyncStatus]);
+  }, [ansibleApi, syncOptions, fetchSyncStatus, fetchJobTemplates, jobTemplates]);
 
   const handleClose = (newSyncOptions?: string[]) => {
     setOpen(false);
@@ -227,27 +262,8 @@ export const HomeComponent = () => {
   };
 
   useEffect(() => {
-    rhAapAuthApi.getAccessToken().then(token => {
-      if (scaffolderApi.autocomplete) {
-        scaffolderApi
-          .autocomplete({
-            token,
-            resource: 'job_templates',
-            provider: 'aap-api-cloud',
-            context: {},
-          })
-          .then(({ results }) =>
-            setJobTemplates(
-              results.map(result => ({
-                id: parseInt(result.id, 10),
-                name: result.title as string,
-              })),
-            ),
-          )
-          .finally(() => setLoading(false));
-      }
-    });
-  }, [scaffolderApi, rhAapAuthApi]);
+    fetchJobTemplates();
+  }, [fetchJobTemplates]);
 
   useEffect(() => {
     if (syncOptions.length > 0) {
@@ -339,7 +355,7 @@ export const HomeComponent = () => {
         )}
       </Header>
       <Content>
-        <EntityListProvider>
+        <EntityListProvider key={syncKey}>
           <CatalogFilterLayout>
             <CatalogFilterLayout.Filters>
               <div data-testid="search-bar-container">
