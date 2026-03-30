@@ -251,7 +251,13 @@ export const HomeComponent = () => {
       setShowSnackbar(true);
     }
     setSyncOptions([]);
-  }, [ansibleApi, syncOptions, fetchSyncStatus, fetchJobTemplates, jobTemplates]);
+  }, [
+    ansibleApi,
+    syncOptions,
+    fetchSyncStatus,
+    fetchJobTemplates,
+    jobTemplates,
+  ]);
 
   const handleClose = (newSyncOptions?: string[]) => {
     setOpen(false);
