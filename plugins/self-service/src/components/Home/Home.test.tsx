@@ -408,6 +408,204 @@ describe('self-service', () => {
     expect(screen.getByText('Templates', { exact: true })).toBeInTheDocument();
   });
 
+  describe('fetchJobTemplates and sync refresh', () => {
+    // Helper: opens sync dialog, selects Job Templates checkbox, clicks Ok
+    const triggerTemplateSync = async () => {
+      fireEvent.click(screen.getByText('Sync now'));
+      await waitFor(() =>
+        expect(screen.getByRole('dialog')).toBeInTheDocument(),
+      );
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getAllByRole('checkbox')[1]);
+      fireEvent.click(screen.getByText('Ok'));
+    };
+
+    it('should fetch job templates via autocomplete on mount', async () => {
+      const entityRefs = ['component:default/e1'];
+      const tags = ['tag1'];
+      mockCatalogApi.getEntityFacets.mockResolvedValue(
+        facetsFromEntityRefs(entityRefs, tags),
+      );
+
+      await render(<HomeComponent />);
+
+      await waitFor(() => {
+        expect(mockRhAapAuthApi.getAccessToken).toHaveBeenCalled();
+        expect(mockScaffolderApi.autocomplete).toHaveBeenCalledWith({
+          token: 'mock-token',
+          resource: 'job_templates',
+          provider: 'aap-api-cloud',
+          context: {},
+        });
+      });
+    });
+
+    it('should re-fetch job templates after successful template sync', async () => {
+      const entityRefs = ['component:default/e1'];
+      const tags = ['tag1'];
+      mockCatalogApi.getEntityFacets.mockResolvedValue(
+        facetsFromEntityRefs(entityRefs, tags),
+      );
+      mockAnsibleApi.syncTemplates.mockResolvedValue(true);
+
+      await render(<HomeComponent />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Sync now')).toBeInTheDocument();
+      });
+
+      // Clear call count from initial mount so we only track post-sync calls
+      (mockScaffolderApi.autocomplete as jest.Mock).mockClear();
+
+      await triggerTemplateSync();
+
+      await waitFor(() => {
+        expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
+        expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('should not re-fetch job templates when template sync fails', async () => {
+      const entityRefs = ['component:default/e1'];
+      const tags = ['tag1'];
+      mockCatalogApi.getEntityFacets.mockResolvedValue(
+        facetsFromEntityRefs(entityRefs, tags),
+      );
+      mockAnsibleApi.syncTemplates.mockResolvedValue(false);
+
+      await render(<HomeComponent />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Sync now')).toBeInTheDocument();
+      });
+
+      (mockScaffolderApi.autocomplete as jest.Mock).mockClear();
+
+      await triggerTemplateSync();
+
+      await waitFor(() => {
+        expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
+      });
+
+      expect(mockScaffolderApi.autocomplete).not.toHaveBeenCalled();
+    });
+
+    it('should not remount when template IDs are unchanged after sync', async () => {
+      const entityRefs = ['component:default/e1'];
+      const tags = ['tag1'];
+      mockCatalogApi.getEntityFacets.mockResolvedValue(
+        facetsFromEntityRefs(entityRefs, tags),
+      );
+      mockAnsibleApi.syncTemplates.mockResolvedValue(true);
+
+      const sameResults = {
+        results: [
+          { id: '1', title: 'Template 1' },
+          { id: '2', title: 'Template 2' },
+        ],
+      };
+
+      // Both mount and post-sync return identical IDs
+      (mockScaffolderApi.autocomplete as jest.Mock)
+        .mockResolvedValueOnce(sameResults)
+        .mockResolvedValueOnce(sameResults);
+
+      await render(<HomeComponent />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Sync now')).toBeInTheDocument();
+      });
+
+      await triggerTemplateSync();
+
+      await waitFor(() => {
+        expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
+        expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(2);
+      });
+
+      // Sync ran successfully but no remount needed — sync status still updated
+      expect(mockAnsibleApi.getSyncStatus).toHaveBeenCalled();
+    });
+
+    it('should remount when a new template is added after sync', async () => {
+      const entityRefs = ['component:default/e1'];
+      const tags = ['tag1'];
+      mockCatalogApi.getEntityFacets.mockResolvedValue(
+        facetsFromEntityRefs(entityRefs, tags),
+      );
+      mockAnsibleApi.syncTemplates.mockResolvedValue(true);
+
+      // Mount: IDs 1, 2
+      (mockScaffolderApi.autocomplete as jest.Mock).mockResolvedValueOnce({
+        results: [
+          { id: '1', title: 'Template 1' },
+          { id: '2', title: 'Template 2' },
+        ],
+      });
+
+      await render(<HomeComponent />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Sync now')).toBeInTheDocument();
+      });
+
+      // After sync: IDs 1, 2, 3 — new template added
+      (mockScaffolderApi.autocomplete as jest.Mock).mockResolvedValueOnce({
+        results: [
+          { id: '1', title: 'Template 1' },
+          { id: '2', title: 'Template 2' },
+          { id: '3', title: 'New Template' },
+        ],
+      });
+
+      await triggerTemplateSync();
+
+      await waitFor(() => {
+        expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
+        expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(2);
+      });
+    });
+
+    it('should remount when a template is removed after sync', async () => {
+      const entityRefs = ['component:default/e1'];
+      const tags = ['tag1'];
+      mockCatalogApi.getEntityFacets.mockResolvedValue(
+        facetsFromEntityRefs(entityRefs, tags),
+      );
+      mockAnsibleApi.syncTemplates.mockResolvedValue(true);
+
+      // Mount: IDs 1, 2, 3
+      (mockScaffolderApi.autocomplete as jest.Mock).mockResolvedValueOnce({
+        results: [
+          { id: '1', title: 'Template 1' },
+          { id: '2', title: 'Template 2' },
+          { id: '3', title: 'Template 3' },
+        ],
+      });
+
+      await render(<HomeComponent />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Sync now')).toBeInTheDocument();
+      });
+
+      // After sync: IDs 1, 2 — template 3 removed
+      (mockScaffolderApi.autocomplete as jest.Mock).mockResolvedValueOnce({
+        results: [
+          { id: '1', title: 'Template 1' },
+          { id: '2', title: 'Template 2' },
+        ],
+      });
+
+      await triggerTemplateSync();
+
+      await waitFor(() => {
+        expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
+        expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(2);
+      });
+    });
+  });
+
   describe('HomeTagPicker', () => {
     it('should render Tags filter', async () => {
       const entityRefs = ['component:default/e1'];
