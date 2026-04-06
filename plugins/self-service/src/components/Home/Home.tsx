@@ -201,28 +201,30 @@ export const HomeComponent = () => {
     const requestId = ++fetchRequestIdRef.current;
     try {
       const token = await rhAapAuthApi.getAccessToken();
-      if (scaffolderApi.autocomplete) {
-        const { results } = await scaffolderApi.autocomplete({
-          token,
-          resource: 'job_templates',
-          provider: 'aap-api-cloud',
-          context: {},
-        });
-        const newTemplates = results.map(result => ({
-          id: parseInt(result.id, 10),
-          name: result.title as string,
-        }));
-        if (requestId === fetchRequestIdRef.current) {
-          setJobTemplates(newTemplates);
-        }
-        return newTemplates;
+      if (!scaffolderApi.autocomplete) {
+        return undefined;
       }
+      const { results } = await scaffolderApi.autocomplete({
+        token,
+        resource: 'job_templates',
+        provider: 'aap-api-cloud',
+        context: {},
+      });
+      const newTemplates = results.map(result => ({
+        id: parseInt(result.id, 10),
+        name: result.title as string,
+      }));
+      if (requestId === fetchRequestIdRef.current) {
+        setJobTemplates(newTemplates);
+      }
+      return newTemplates;
+    } catch {
+      return undefined;
     } finally {
       if (requestId === fetchRequestIdRef.current) {
         setLoading(false);
       }
     }
-    return undefined;
   }, [scaffolderApi, rhAapAuthApi]);
 
   const handleSync = useCallback(async () => {
@@ -247,17 +249,17 @@ export const HomeComponent = () => {
         fetchSyncStatus();
         const preSyncTemplates = jobTemplatesRef.current;
         const newTemplates = await fetchJobTemplates();
-        const serialize = (t: { id: number; name: string }) =>
-          `${t.id}:${t.name}`;
-        const oldKeys = new Set(preSyncTemplates.map(serialize));
-        const newKeys = new Set(
-          newTemplates?.map(serialize) ?? [],
-        );
-        const hasChanges =
-          oldKeys.size !== newKeys.size ||
-          [...newKeys].some(key => !oldKeys.has(key));
-        if (hasChanges) {
-          setSyncKey(prev => prev + 1);
+        if (newTemplates) {
+          const serialize = (t: { id: number; name: string }) =>
+            `${t.id}:${t.name}`;
+          const oldKeys = new Set(preSyncTemplates.map(serialize));
+          const newKeys = new Set(newTemplates.map(serialize));
+          const hasChanges =
+            oldKeys.size !== newKeys.size ||
+            [...newKeys].some(key => !oldKeys.has(key));
+          if (hasChanges) {
+            setSyncKey(prev => prev + 1);
+          }
         }
       } else {
         setSnackbarMsg('Templates sync failed');
