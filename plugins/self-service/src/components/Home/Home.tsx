@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Button,
@@ -176,6 +176,10 @@ export const HomeComponent = () => {
     jobTemplates: { lastSync: null },
   });
 
+  const fetchRequestIdRef = useRef(0);
+  const jobTemplatesRef = useRef(jobTemplates);
+  jobTemplatesRef.current = jobTemplates;
+
   const fetchSyncStatus = useCallback(async () => {
     try {
       const status = await ansibleApi.getSyncStatus();
@@ -194,6 +198,7 @@ export const HomeComponent = () => {
   const fetchJobTemplates = useCallback(async (): Promise<
     { id: number; name: string }[] | undefined
   > => {
+    const requestId = ++fetchRequestIdRef.current;
     try {
       const token = await rhAapAuthApi.getAccessToken();
       if (scaffolderApi.autocomplete) {
@@ -207,11 +212,15 @@ export const HomeComponent = () => {
           id: parseInt(result.id, 10),
           name: result.title as string,
         }));
-        setJobTemplates(newTemplates);
+        if (requestId === fetchRequestIdRef.current) {
+          setJobTemplates(newTemplates);
+        }
         return newTemplates;
       }
     } finally {
-      setLoading(false);
+      if (requestId === fetchRequestIdRef.current) {
+        setLoading(false);
+      }
     }
     return undefined;
   }, [scaffolderApi, rhAapAuthApi]);
@@ -236,12 +245,17 @@ export const HomeComponent = () => {
       if (result) {
         setSnackbarMsg('Templates synced successfully');
         fetchSyncStatus();
+        const preSyncTemplates = jobTemplatesRef.current;
         const newTemplates = await fetchJobTemplates();
-        const oldIds = new Set(jobTemplates.map(t => t.id));
-        const newIds = new Set(newTemplates?.map(t => t.id) ?? []);
+        const serialize = (t: { id: number; name: string }) =>
+          `${t.id}:${t.name}`;
+        const oldKeys = new Set(preSyncTemplates.map(serialize));
+        const newKeys = new Set(
+          newTemplates?.map(serialize) ?? [],
+        );
         const hasChanges =
-          oldIds.size !== newIds.size ||
-          [...newIds].some(id => !oldIds.has(id));
+          oldKeys.size !== newKeys.size ||
+          [...newKeys].some(key => !oldKeys.has(key));
         if (hasChanges) {
           setSyncKey(prev => prev + 1);
         }
@@ -251,13 +265,7 @@ export const HomeComponent = () => {
       setShowSnackbar(true);
     }
     setSyncOptions([]);
-  }, [
-    ansibleApi,
-    syncOptions,
-    fetchSyncStatus,
-    fetchJobTemplates,
-    jobTemplates,
-  ]);
+  }, [ansibleApi, syncOptions, fetchSyncStatus, fetchJobTemplates]);
 
   const handleClose = (newSyncOptions?: string[]) => {
     setOpen(false);
