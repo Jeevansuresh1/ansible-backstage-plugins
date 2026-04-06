@@ -1487,6 +1487,55 @@ describe('RunTask', () => {
       useTaskEventStreamMock.mockImplementation(originalImplementation);
     }, 15000);
 
+    it('should not show download button when nested publishAndBuild.publishToSCM is true', async () => {
+      const useTaskEventStreamMock =
+        require('@backstage/plugin-scaffolder-react').useTaskEventStream;
+
+      const originalImplementation =
+        useTaskEventStreamMock.getMockImplementation();
+
+      useTaskEventStreamMock.mockImplementation(() => ({
+        task: {
+          spec: {
+            templateInfo: {
+              entity: {
+                metadata: {
+                  title: 'Test Template',
+                },
+              },
+            },
+            parameters: {
+              publishAndBuild: {
+                publishToSCM: true,
+                eeFileName: 'test-ee',
+              },
+            },
+            steps: [
+              { id: 'step1', name: 'Step 1' },
+              { id: 'create-ee-definition', name: 'Create EE Definition' },
+            ],
+          },
+        },
+        completed: true,
+        loading: false,
+        error: undefined,
+        output: { links: [] },
+        steps: {
+          step1: { status: 'completed' },
+          'create-ee-definition': { status: 'completed' },
+        },
+        stepLogs: {},
+      }));
+
+      await render(<RunTask />);
+
+      await waitFor(() => {
+        expect(screen.queryByText('Download EE Files')).not.toBeInTheDocument();
+      });
+
+      useTaskEventStreamMock.mockImplementation(originalImplementation);
+    }, 15000);
+
     it('should download archive when download button is clicked', async () => {
       const user = userEvent.setup();
 
@@ -2510,7 +2559,7 @@ describe('RunTask', () => {
             call =>
               typeof call[0] === 'string' &&
               call[0] ===
-                'Entity, definition, readme, ansible_cfg or template not available',
+                'Entity, definition, readme, or template not available',
           );
           expect(hasExpectedError).toBe(true);
         },

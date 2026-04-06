@@ -10,6 +10,8 @@ import {
 } from 'react-router-dom';
 import CategoryOutlinedIcon from '@material-ui/icons/CategoryOutlined';
 import TimelineIcon from '@material-ui/icons/Timeline';
+import { RequirePermission } from '@backstage/plugin-permission-react';
+import { gitRepositoriesViewPermission } from '@ansible/backstage-rhaap-common/permissions';
 
 import {
   useApi,
@@ -17,16 +19,14 @@ import {
   discoveryApiRef,
   fetchApiRef,
 } from '@backstage/core-plugin-api';
-import { RequirePermission } from '@backstage/plugin-permission-react';
-import { gitRepositoriesViewPermission } from '@ansible/backstage-rhaap-common/permissions';
+import { useSyncStatusPolling } from '../../hooks';
+import { SyncDialog } from '../common';
+import type { SyncStatusMap, StartedSyncInfo } from '../common';
 import {
   NotificationProvider,
   NotificationStack,
   useNotifications,
 } from '../notifications';
-import { useSyncStatusPolling } from '../CollectionsCatalog/useSyncStatusPolling';
-import { SyncDialog } from '../common';
-import type { SyncStatusMap, StartedSyncInfo } from '../common';
 
 import { rootRouteRef } from '../../routes';
 import { RepositoriesPageHeaderSection } from './RepositoriesPageHeaderSection';
@@ -71,14 +71,13 @@ const getTabIndexFromPath = (pathname: string): number => {
   return 0;
 };
 
-const GitRepositoriesPageInner = () => {
+export const GitRepositoriesPage = () => {
   const classes = useStyles();
   const location = useLocation();
   const navigate = useNavigate();
   const discoveryApi = useApi(discoveryApiRef);
   const fetchApi = useApi(fetchApiRef);
   const rootLink = useRouteRef(rootRouteRef);
-  const { notifications, removeNotification } = useNotifications();
   const { isSyncInProgress, startTracking } = useSyncStatusPolling();
 
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
@@ -205,21 +204,28 @@ const GitRepositoriesPageInner = () => {
         onClose={() => setSyncDialogOpen(false)}
         onSyncsStarted={handleSyncsStarted}
       />
-      <NotificationStack
-        notifications={notifications}
-        onClose={removeNotification}
-      />
     </Page>
   );
 };
 
-export const GitRepositoriesPage = () => {
+// Inner content component that uses the notification context
+const GitRepositoriesRoutesContent = () => {
+  const { notifications, removeNotification } = useNotifications();
+
   return (
-    <RequirePermission permission={gitRepositoriesViewPermission}>
-      <NotificationProvider>
-        <GitRepositoriesPageInner />
-      </NotificationProvider>
-    </RequirePermission>
+    <>
+      <Routes>
+        <Route index element={<Navigate to="catalog" replace />} />
+        <Route path="catalog" element={<GitRepositoriesPage />} />
+        <Route path="ci-activity" element={<GitRepositoriesPage />} />
+        <Route path=":repositoryName" element={<RepositoryDetailsPage />} />
+        <Route path="*" element={<Navigate to="catalog" replace />} />
+      </Routes>
+      <NotificationStack
+        notifications={notifications}
+        onClose={removeNotification}
+      />
+    </>
   );
 };
 
@@ -227,12 +233,10 @@ export const GitRepositoriesPage = () => {
 // so detail URLs like /self-service/repositories/:repositoryName resolve correctly.
 export const GitRepositoriesRoutesPage = () => {
   return (
-    <Routes>
-      <Route index element={<Navigate to="catalog" replace />} />
-      <Route path="catalog" element={<GitRepositoriesPage />} />
-      <Route path="ci-activity" element={<GitRepositoriesPage />} />
-      <Route path=":repositoryName" element={<RepositoryDetailsPage />} />
-      <Route path="*" element={<Navigate to="catalog" replace />} />
-    </Routes>
+    <RequirePermission permission={gitRepositoriesViewPermission}>
+      <NotificationProvider>
+        <GitRepositoriesRoutesContent />
+      </NotificationProvider>
+    </RequirePermission>
   );
 };
