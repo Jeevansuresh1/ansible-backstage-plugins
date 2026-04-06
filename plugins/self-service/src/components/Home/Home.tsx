@@ -245,8 +245,9 @@ export const HomeComponent = () => {
       result = await ansibleApi.syncTemplates();
       setShowSnackbar(false);
       if (result) {
-        setSnackbarMsg('Templates synced successfully');
         fetchSyncStatus();
+        setSnackbarMsg('Fetching updated templates...');
+        setShowSnackbar(true);
         const preSyncTemplates = jobTemplatesRef.current;
         const newTemplates = await fetchJobTemplates();
         if (newTemplates) {
@@ -261,6 +262,7 @@ export const HomeComponent = () => {
             setSyncKey(prev => prev + 1);
           }
         }
+        setSnackbarMsg('Templates synced successfully');
       } else {
         setSnackbarMsg('Templates sync failed');
       }
