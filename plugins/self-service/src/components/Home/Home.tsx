@@ -218,7 +218,9 @@ export const HomeComponent = () => {
         setJobTemplates(newTemplates);
       }
       return newTemplates;
-    } catch {
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error('Failed to fetch job templates:', error);
       return undefined;
     } finally {
       if (requestId === fetchRequestIdRef.current) {
@@ -262,7 +264,11 @@ export const HomeComponent = () => {
             setSyncKey(prev => prev + 1);
           }
         }
-        setSnackbarMsg('Templates synced successfully');
+        setSnackbarMsg(
+          newTemplates
+            ? 'Templates synced successfully'
+            : 'Templates synced, but failed to refresh the list',
+        );
       } else {
         setSnackbarMsg('Templates sync failed');
       }
