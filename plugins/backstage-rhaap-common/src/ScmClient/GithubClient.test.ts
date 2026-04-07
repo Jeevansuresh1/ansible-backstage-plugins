@@ -191,6 +191,110 @@ describe('GithubClient', () => {
       });
     });
 
+    it('retries GraphQL up to 2 times on HTTP 5xx then succeeds', async () => {
+      jest.useFakeTimers();
+
+      try {
+        const successBody = {
+          data: {
+            organization: {
+              repositories: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [],
+              },
+            },
+          },
+        };
+
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: false,
+            status: 502,
+            text: () => Promise.resolve('bad gateway'),
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve(successBody),
+          });
+
+        const promise = client.getRepositories();
+
+        await Promise.resolve();
+        await jest.runOnlyPendingTimersAsync();
+
+        const repos = await promise;
+
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+        expect(repos).toHaveLength(0);
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringMatching(/HTTP 502, retry 1\/2/),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('stops after all 5xx retries are exhausted and throws from the last response', async () => {
+      jest.useFakeTimers();
+
+      try {
+        const errorResponse = {
+          ok: false,
+          status: 503,
+          text: () => Promise.resolve('service unavailable'),
+        };
+
+        mockFetch
+          .mockResolvedValueOnce(errorResponse)
+          .mockResolvedValueOnce(errorResponse)
+          .mockResolvedValueOnce(errorResponse);
+
+        const promise = client.getRepositories();
+        // Attach the matcher before advancing timers so the rejection is never "unhandled";
+        // await is deferred until after fake timers (jest/valid-expect disallows non-awaited expect).
+        const expectRejected =
+          // eslint-disable-next-line jest/valid-expect -- awaited after runOnlyPendingTimersAsync below
+          expect(promise).rejects.toThrow(
+            'GitHub GraphQL error (503): service unavailable',
+          );
+
+        await Promise.resolve();
+        await jest.runOnlyPendingTimersAsync();
+        await Promise.resolve();
+        await jest.runOnlyPendingTimersAsync();
+
+        await expectRejected;
+
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+        expect(mockLogger.warn).toHaveBeenCalledTimes(2);
+        expect(mockLogger.warn).toHaveBeenNthCalledWith(
+          1,
+          expect.stringMatching(/HTTP 503, retry 1\/2/),
+        );
+        expect(mockLogger.warn).toHaveBeenNthCalledWith(
+          2,
+          expect.stringMatching(/HTTP 503, retry 2\/2/),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('does not retry GraphQL on non-5xx errors', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve('not found'),
+      });
+
+      await expect(client.getRepositories()).rejects.toThrow(
+        'GitHub GraphQL error (404)',
+      );
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    });
+
     it('should skip archived repositories', async () => {
       const mockResponse = {
         data: {
@@ -517,6 +621,17 @@ describe('GithubClient', () => {
         'GitHub API error (404): Not Found',
       );
     });
+
+    it('should throw when AbortSignal is already aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        client.getBranches(mockRepo, controller.signal),
+      ).rejects.toThrow('SCM sync aborted, stopping branch fetch');
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
   });
 
   describe('getTags', () => {
@@ -568,6 +683,29 @@ describe('GithubClient', () => {
 
       expect(tags).toHaveLength(101);
       expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('should throw error on API failure', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: () => Promise.resolve('Forbidden'),
+      });
+
+      await expect(client.getTags(mockRepo)).rejects.toThrow(
+        'GitHub API error (403): Forbidden',
+      );
+    });
+
+    it('should throw when AbortSignal is already aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(client.getTags(mockRepo, controller.signal)).rejects.toThrow(
+        'SCM sync aborted, stopping tag fetch',
+      );
+
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 
@@ -676,6 +814,86 @@ describe('GithubClient', () => {
       await expect(
         client.getFileContent(mockRepo, 'main', 'nonexistent.txt'),
       ).rejects.toThrow('Failed to fetch file content: 404 Not Found');
+    });
+
+    it('should throw AbortError when signal is already aborted before fetch', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        client.getFileContent(mockRepo, 'main', 'file.ts', controller.signal),
+      ).rejects.toThrow('The operation was aborted');
+
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should throw AbortError when signal aborts between fetch and sleepMs', async () => {
+      jest.useFakeTimers();
+
+      try {
+        const controller = new AbortController();
+
+        mockFetch.mockResolvedValueOnce({
+          ok: false,
+          status: 502,
+          arrayBuffer: () => {
+            controller.abort();
+            return Promise.resolve(new ArrayBuffer(0));
+          },
+        });
+
+        const promise = client.getFileContent(
+          mockRepo,
+          'main',
+          'file.ts',
+          controller.signal,
+        );
+
+        await expect(promise).rejects.toThrow('The operation was aborted');
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('should throw AbortError when signal fires during retry backoff', async () => {
+      jest.useFakeTimers();
+
+      try {
+        const controller = new AbortController();
+
+        mockFetch.mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        });
+
+        const promise = client.getFileContent(
+          mockRepo,
+          'main',
+          'file.ts',
+          controller.signal,
+        );
+
+        const expectRejected =
+          // eslint-disable-next-line jest/valid-expect
+          expect(promise).rejects.toThrow('The operation was aborted');
+
+        // Flush enough microtasks for fetchWithRetry to enter sleepMs and set
+        // up the addEventListener before we fire abort.
+        for (let i = 0; i < 10; i++) {
+          await Promise.resolve();
+        }
+
+        controller.abort();
+
+        await expectRejected;
+
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 

@@ -9,6 +9,9 @@ import type { RepositoryInfo, DirectoryEntry, UrlBuildOptions } from './types';
  * REST API for specific operations when needed.
  */
 export class GithubClient extends BaseScmClient {
+  /** Retries after HTTP 5xx only: 1 initial request + this many retries (e.g. 2 → up to 3 attempts). */
+  private static readonly MAX_RETRIES = 2;
+
   private readonly apiUrl: string;
   private readonly graphqlUrl: string;
   private readonly checkSSL: boolean;
@@ -67,12 +70,90 @@ export class GithubClient extends BaseScmClient {
         ) as unknown as Promise<Response>);
   }
 
+  private is5xxStatus(status: number): boolean {
+    return status >= 500 && status < 600;
+  }
+
+  private sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(
+          Object.assign(new Error('The operation was aborted'), {
+            name: 'AbortError',
+          }),
+        );
+        return;
+      }
+      const timeoutRef: { id?: ReturnType<typeof setTimeout> } = {};
+      const onAbort = () => {
+        if (timeoutRef.id !== undefined) clearTimeout(timeoutRef.id);
+        signal?.removeEventListener('abort', onAbort);
+        reject(
+          Object.assign(new Error('The operation was aborted'), {
+            name: 'AbortError',
+          }),
+        );
+      };
+      timeoutRef.id = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      signal?.addEventListener('abort', onAbort);
+    });
+  }
+
+  /**
+   * On HTTP 5xx only, retry up to MAX_RETRIES times with short backoff.
+   * Other statuses return immediately (caller handles errors).
+   */
+  private async fetchWithRetry(
+    url: string,
+    init?: RequestInit,
+  ): Promise<Response> {
+    const signal = init?.signal;
+    const maxAttempts = 1 + GithubClient.MAX_RETRIES;
+    let lastResponse!: Response;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (signal?.aborted) {
+        throw Object.assign(new Error('The operation was aborted'), {
+          name: 'AbortError',
+        });
+      }
+
+      lastResponse = await this.doFetch(url, init);
+
+      if (lastResponse.ok || !this.is5xxStatus(lastResponse.status)) {
+        return lastResponse;
+      }
+
+      if (attempt === maxAttempts - 1) {
+        return lastResponse;
+      }
+
+      // Release the failed body before reusing the connection on the next attempt.
+      try {
+        await lastResponse.arrayBuffer().catch(() => undefined);
+      } catch {
+        // ignore (e.g. test doubles without arrayBuffer)
+      }
+
+      const delayMs = 1000 * (attempt + 1);
+      this.logger.warn(
+        `[GithubClient] HTTP ${lastResponse.status}, retry ${attempt + 1}/${GithubClient.MAX_RETRIES} after ${delayMs}ms`,
+      );
+      await this.sleepMs(delayMs, signal ?? undefined);
+    }
+
+    return lastResponse;
+  }
+
   // fetch data from github REST API
   private async fetchRest<T>(
     endpoint: string,
     signal?: AbortSignal,
   ): Promise<T> {
-    const response = await this.doFetch(`${this.apiUrl}${endpoint}`, {
+    const response = await this.fetchWithRetry(`${this.apiUrl}${endpoint}`, {
       signal,
     });
 
@@ -89,7 +170,7 @@ export class GithubClient extends BaseScmClient {
     variables: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<T> {
-    const response = await this.doFetch(this.graphqlUrl, {
+    const response = await this.fetchWithRetry(this.graphqlUrl, {
       signal,
       method: 'POST',
       headers: {
@@ -317,7 +398,7 @@ export class GithubClient extends BaseScmClient {
     const url = `${this.apiUrl}/repos/${repo.fullPath}/contents/${encodeURIComponent(
       path,
     )}?ref=${encodeURIComponent(ref)}`;
-    const response = await this.doFetch(url, {
+    const response = await this.fetchWithRetry(url, {
       signal,
       headers: {
         Accept: 'application/vnd.github.v3.raw',
