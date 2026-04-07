@@ -575,9 +575,9 @@ describe('self-service', () => {
 
       // EntityListProvider should have remounted — getEntityFacets called again
       await waitFor(() => {
-        expect(mockCatalogApi.getEntityFacets.mock.calls.length).toBeGreaterThan(
-          facetCallsBeforeSync,
-        );
+        expect(
+          mockCatalogApi.getEntityFacets.mock.calls.length,
+        ).toBeGreaterThan(facetCallsBeforeSync);
       });
     });
 
@@ -624,9 +624,9 @@ describe('self-service', () => {
 
       // EntityListProvider should have remounted — getEntityFacets called again
       await waitFor(() => {
-        expect(mockCatalogApi.getEntityFacets.mock.calls.length).toBeGreaterThan(
-          facetCallsBeforeSync,
-        );
+        expect(
+          mockCatalogApi.getEntityFacets.mock.calls.length,
+        ).toBeGreaterThan(facetCallsBeforeSync);
       });
     });
 
@@ -672,9 +672,9 @@ describe('self-service', () => {
 
       // EntityListProvider should have remounted — getEntityFacets called again
       await waitFor(() => {
-        expect(mockCatalogApi.getEntityFacets.mock.calls.length).toBeGreaterThan(
-          facetCallsBeforeSync,
-        );
+        expect(
+          mockCatalogApi.getEntityFacets.mock.calls.length,
+        ).toBeGreaterThan(facetCallsBeforeSync);
       });
     });
   });
