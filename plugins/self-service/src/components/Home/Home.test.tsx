@@ -506,7 +506,6 @@ describe('self-service', () => {
         ],
       };
 
-      // Both mount and post-sync return identical IDs
       (mockScaffolderApi.autocomplete as jest.Mock)
         .mockResolvedValueOnce(sameResults)
         .mockResolvedValueOnce(sameResults);
@@ -517,6 +516,9 @@ describe('self-service', () => {
         expect(screen.getByText('Sync now')).toBeInTheDocument();
       });
 
+      const facetCallsBeforeSync =
+        mockCatalogApi.getEntityFacets.mock.calls.length;
+
       await triggerTemplateSync();
 
       await waitFor(() => {
@@ -524,8 +526,10 @@ describe('self-service', () => {
         expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(2);
       });
 
-      // Sync ran successfully but no remount needed — sync status still updated
-      expect(mockAnsibleApi.getSyncStatus).toHaveBeenCalled();
+      // EntityListProvider should NOT have remounted — no new getEntityFacets calls
+      expect(mockCatalogApi.getEntityFacets.mock.calls.length).toBe(
+        facetCallsBeforeSync,
+      );
     });
 
     it('should remount when a new template is added after sync', async () => {
@@ -550,6 +554,9 @@ describe('self-service', () => {
         expect(screen.getByText('Sync now')).toBeInTheDocument();
       });
 
+      const facetCallsBeforeSync =
+        mockCatalogApi.getEntityFacets.mock.calls.length;
+
       // After sync: IDs 1, 2, 3 — new template added
       (mockScaffolderApi.autocomplete as jest.Mock).mockResolvedValueOnce({
         results: [
@@ -564,6 +571,13 @@ describe('self-service', () => {
       await waitFor(() => {
         expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
         expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(2);
+      });
+
+      // EntityListProvider should have remounted — getEntityFacets called again
+      await waitFor(() => {
+        expect(mockCatalogApi.getEntityFacets.mock.calls.length).toBeGreaterThan(
+          facetCallsBeforeSync,
+        );
       });
     });
 
@@ -590,6 +604,9 @@ describe('self-service', () => {
         expect(screen.getByText('Sync now')).toBeInTheDocument();
       });
 
+      const facetCallsBeforeSync =
+        mockCatalogApi.getEntityFacets.mock.calls.length;
+
       // After sync: IDs 1, 2 — template 3 removed
       (mockScaffolderApi.autocomplete as jest.Mock).mockResolvedValueOnce({
         results: [
@@ -603,6 +620,13 @@ describe('self-service', () => {
       await waitFor(() => {
         expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
         expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(2);
+      });
+
+      // EntityListProvider should have remounted — getEntityFacets called again
+      await waitFor(() => {
+        expect(mockCatalogApi.getEntityFacets.mock.calls.length).toBeGreaterThan(
+          facetCallsBeforeSync,
+        );
       });
     });
 
@@ -628,6 +652,9 @@ describe('self-service', () => {
         expect(screen.getByText('Sync now')).toBeInTheDocument();
       });
 
+      const facetCallsBeforeSync =
+        mockCatalogApi.getEntityFacets.mock.calls.length;
+
       // After sync: same IDs but template 2 was renamed
       (mockScaffolderApi.autocomplete as jest.Mock).mockResolvedValueOnce({
         results: [
@@ -641,6 +668,13 @@ describe('self-service', () => {
       await waitFor(() => {
         expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
         expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(2);
+      });
+
+      // EntityListProvider should have remounted — getEntityFacets called again
+      await waitFor(() => {
+        expect(mockCatalogApi.getEntityFacets.mock.calls.length).toBeGreaterThan(
+          facetCallsBeforeSync,
+        );
       });
     });
   });

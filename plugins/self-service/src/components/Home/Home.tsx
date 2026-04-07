@@ -267,7 +267,7 @@ export const HomeComponent = () => {
         setSnackbarMsg(
           newTemplates
             ? 'Templates synced successfully'
-            : 'Templates synced, but failed to refresh the list',
+            : 'Templates synced, but refreshing the list failed. Please reload the page.',
         );
       } else {
         setSnackbarMsg('Templates sync failed');
