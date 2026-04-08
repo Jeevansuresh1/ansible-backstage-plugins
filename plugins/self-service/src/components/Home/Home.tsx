@@ -50,6 +50,24 @@ const headerStyles = makeStyles(theme => ({
   },
 }));
 
+/** When the first post sync AAP list matches pre sync, a second fetch may still be stale, wait before retrying. */
+const JOB_TEMPLATE_LIST_STALE_RETRY_MS = 450;
+
+/** Used to detect AAP job template list changes after sync. */
+const serializeJobTemplateKey = (t: { id: number; name: string }) =>
+  `${t.id}:${t.name}`;
+
+const jobTemplateListsDiffer = (
+  prev: { id: number; name: string }[],
+  next: { id: number; name: string }[],
+): boolean => {
+  if (prev.length !== next.length) {
+    return true;
+  }
+  const prevKeys = new Set(prev.map(serializeJobTemplateKey));
+  return next.some(t => !prevKeys.has(serializeJobTemplateKey(t)));
+};
+
 const isHomePageTemplate = (
   entity: TemplateEntityV1beta3,
   jobTemplates: { id: number; name: string }[],
@@ -251,19 +269,18 @@ export const HomeComponent = () => {
         setSnackbarMsg('Fetching updated templates...');
         setShowSnackbar(true);
         const preSyncTemplates = jobTemplatesRef.current;
-        const newTemplates = await fetchJobTemplates();
-        if (newTemplates) {
-          const serialize = (t: { id: number; name: string }) =>
-            `${t.id}:${t.name}`;
-          const oldKeys = new Set(preSyncTemplates.map(serialize));
-          const newKeys = new Set(newTemplates.map(serialize));
-          const hasChanges =
-            oldKeys.size !== newKeys.size ||
-            [...newKeys].some(key => !oldKeys.has(key));
-          if (hasChanges) {
-            setSyncKey(prev => prev + 1);
-          }
+        let newTemplates = await fetchJobTemplates();
+        // delayed re-fetch to aligns the allow-list with the provider
+        const listUnchanged =
+          newTemplates &&
+          !jobTemplateListsDiffer(preSyncTemplates, newTemplates);
+        if (listUnchanged) {
+          await new Promise(resolve =>
+            setTimeout(resolve, JOB_TEMPLATE_LIST_STALE_RETRY_MS),
+          );
+          newTemplates = await fetchJobTemplates();
         }
+        setSyncKey(prev => prev + 1);
         setSnackbarMsg(
           newTemplates
             ? 'Templates synced successfully'
