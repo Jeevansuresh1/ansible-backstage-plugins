@@ -306,6 +306,16 @@ export const HomeComponent = () => {
     fetchJobTemplates();
   }, [fetchJobTemplates]);
 
+  // Auto-refresh catalog data after a short delay so that recently
+  // imported templates (via "Add Template") appear without a manual reload.
+  useEffect(() => {
+    const CATALOG_SETTLE_MS = 700;
+    const timerId = setTimeout(() => {
+      setSyncKey(prev => prev + 1);
+    }, CATALOG_SETTLE_MS);
+    return () => clearTimeout(timerId);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (syncOptions.length > 0) {
       handleSync();
