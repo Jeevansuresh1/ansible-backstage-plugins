@@ -1,7 +1,11 @@
 import {
   toEEDefinitionUrl,
   getEntityEEDefinitionUrl,
+  getScmRepoUrlForAuth,
+  isEntityPublishedToGithub,
   downloadEntityAsTarArchive,
+  normalizePahRegistryUrlForBuild,
+  messageFromUnknownError,
 } from './helpers';
 import { Entity } from '@backstage/catalog-model';
 import { ANNOTATION_EDIT_URL } from '@backstage/catalog-model';
@@ -133,6 +137,121 @@ describe('catalog helpers', () => {
         },
       } as unknown as Entity;
       expect(getEntityEEDefinitionUrl(entity)).toBe('');
+    });
+  });
+
+  describe('getScmRepoUrlForAuth', () => {
+    it('returns null without source-location or scm-provider', () => {
+      expect(
+        getScmRepoUrlForAuth({
+          metadata: { name: 'ee1', annotations: {} },
+        } as unknown as Entity),
+      ).toBeNull();
+    });
+
+    it('returns GitHub org/repo base URL from tree path', () => {
+      expect(
+        getScmRepoUrlForAuth({
+          metadata: {
+            name: 'ee1',
+            annotations: {
+              'backstage.io/source-location':
+                'url:https://github.com/acme/widgets/tree/main/ee-dir/',
+              'ansible.io/scm-provider': 'github',
+            },
+          },
+        } as unknown as Entity),
+      ).toBe('https://github.com/acme/widgets');
+    });
+
+    it('returns GitLab group/project path before tree (legacy path)', () => {
+      expect(
+        getScmRepoUrlForAuth({
+          metadata: {
+            name: 'ee1',
+            annotations: {
+              'backstage.io/source-location':
+                'url:https://gitlab.com/group/sub/proj/tree/main/subdir/',
+              'ansible.io/scm-provider': 'gitlab',
+            },
+          },
+        } as unknown as Entity),
+      ).toBe('https://gitlab.com/group/sub/proj');
+    });
+
+    it('returns GitLab repo base for canonical /-/tree/ path', () => {
+      expect(
+        getScmRepoUrlForAuth({
+          metadata: {
+            name: 'ee1',
+            annotations: {
+              'backstage.io/source-location':
+                'url:https://gitlab.com/group/sub/proj/-/tree/main/subdir/',
+              'ansible.io/scm-provider': 'gitlab',
+            },
+          },
+        } as unknown as Entity),
+      ).toBe('https://gitlab.com/group/sub/proj');
+    });
+
+    it('returns null for unsupported scm-provider value', () => {
+      expect(
+        getScmRepoUrlForAuth({
+          metadata: {
+            name: 'ee1',
+            annotations: {
+              'backstage.io/source-location':
+                'url:https://bitbucket.org/a/b/src/main/',
+              'ansible.io/scm-provider': 'bitbucket',
+            },
+          },
+        } as unknown as Entity),
+      ).toBeNull();
+    });
+  });
+
+  describe('isEntityPublishedToGithub', () => {
+    it('returns false without github scm-provider', () => {
+      expect(
+        isEntityPublishedToGithub({
+          metadata: {
+            name: 'ee1',
+            annotations: {
+              'backstage.io/source-location':
+                'url:https://gitlab.com/g/p/-/tree/main/',
+              'ansible.io/scm-provider': 'gitlab',
+            },
+          },
+        } as unknown as Entity),
+      ).toBe(false);
+    });
+
+    it('returns false when scm-provider is github but source URL cannot be resolved', () => {
+      expect(
+        isEntityPublishedToGithub({
+          metadata: {
+            name: 'ee1',
+            annotations: {
+              'ansible.io/scm-provider': 'github',
+            },
+          },
+        } as unknown as Entity),
+      ).toBe(false);
+    });
+
+    it('returns true for github with valid source-location', () => {
+      expect(
+        isEntityPublishedToGithub({
+          metadata: {
+            name: 'ee1',
+            annotations: {
+              'backstage.io/source-location':
+                'url:https://github.com/acme/widgets/tree/main/ee-dir/',
+              'ansible.io/scm-provider': 'Github',
+            },
+          },
+        } as unknown as Entity),
+      ).toBe(true);
     });
   });
 
@@ -310,6 +429,52 @@ describe('catalog helpers', () => {
       });
 
       expect(downloadEntityAsTarArchive(validEntity)).toBe(false);
+    });
+  });
+
+  describe('normalizePahRegistryUrlForBuild', () => {
+    it('strips https, http, and trailing slashes', () => {
+      expect(normalizePahRegistryUrlForBuild('https://hub.example.com/')).toBe(
+        'hub.example.com',
+      );
+      expect(normalizePahRegistryUrlForBuild('http://hub.example.com///')).toBe(
+        'hub.example.com',
+      );
+      expect(normalizePahRegistryUrlForBuild('HTTPS://FOO.BAR/path///')).toBe(
+        'FOO.BAR/path',
+      );
+    });
+
+    it('leaves host-only values unchanged aside from trim', () => {
+      expect(normalizePahRegistryUrlForBuild('hub.example.com')).toBe(
+        'hub.example.com',
+      );
+    });
+
+    it('returns empty for whitespace-only input', () => {
+      expect(normalizePahRegistryUrlForBuild('   ')).toBe('');
+    });
+  });
+
+  describe('messageFromUnknownError', () => {
+    it('handles Error, string, object, and fallbacks', () => {
+      expect(messageFromUnknownError(new Error('x'))).toBe('x');
+      expect(messageFromUnknownError('msg')).toBe('msg');
+      expect(messageFromUnknownError({ a: 1 })).toBe('{"a":1}');
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      expect(messageFromUnknownError(circular)).toBe(
+        'Something went wrong. Try again.',
+      );
+      expect(messageFromUnknownError(503)).toBe('503');
+      expect(messageFromUnknownError(false)).toBe('false');
+      expect(messageFromUnknownError(BigInt(1))).toBe('1');
+      expect(messageFromUnknownError(Symbol('s'))).toBe('Symbol(s)');
+      expect(messageFromUnknownError(Symbol())).toBe('Symbol');
+      expect(messageFromUnknownError(() => {})).toBe(
+        'Unexpected function thrown as error',
+      );
+      expect(messageFromUnknownError(undefined)).toBe('Unknown error');
     });
   });
 });

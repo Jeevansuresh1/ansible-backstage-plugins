@@ -12,6 +12,33 @@ import { GithubClient } from './GithubClient';
 import { GitlabClient } from './GitlabClient';
 import { resolveGithubToken } from './resolveGithubToken';
 
+const WORKFLOW_DISPATCH_PLACEHOLDER_ORG = '__workflow_dispatch__';
+
+/**
+ * Builds a {@link GithubClient} for arbitrary-repo GitHub REST calls (e.g. Actions workflow_dispatch)
+ * using an explicit host and token — for example integration token plus optional request Bearer fallback.
+ * Does not use {@link ScmClientFactory#createClient}; organization is a placeholder and unused for dispatch.
+ */
+export function createGithubClientForWorkflowDispatch(options: {
+  logger: LoggerService;
+  host: string;
+  token: string;
+  apiBaseUrl?: string;
+  checkSSL?: boolean;
+}): GithubClient {
+  return new GithubClient({
+    logger: options.logger,
+    config: {
+      scmProvider: 'github',
+      host: options.host,
+      organization: WORKFLOW_DISPATCH_PLACEHOLDER_ORG,
+      token: options.token,
+      apiBaseUrl: options.apiBaseUrl,
+      checkSSL: options.checkSSL ?? true,
+    },
+  });
+}
+
 export interface CreateScmClientOptions {
   scmProvider: ScmProvider;
   host?: string;
@@ -64,6 +91,12 @@ export class ScmClientFactory {
         this.logger.info(
           `[ScmClientFactory] Using provided OAuth token for GitHub host: ${resolvedHost}`,
         );
+      } else if (!token) {
+        this.logger.warn(
+          `[ScmClientFactory] No token for GitHub host: ${resolvedHost}; ` +
+            `REST endpoints (branches, tags, contents) will work for public repos, ` +
+            `but GraphQL operations (organization repository listing) require authentication`,
+        );
       }
 
       const config = {
@@ -112,6 +145,16 @@ export class ScmClientFactory {
     repository?: string,
     hasProvidedToken: boolean = false,
   ): Promise<{ token: string; apiBaseUrl?: string }> {
+    const integration = this.integrations.github.byHost(host);
+    const apiBaseUrl = integration?.config.apiBaseUrl;
+
+    if (!integration) {
+      throw new Error(
+        `No GitHub integration configured for host: ${host}. ` +
+          `Please configure it in app-config.yaml under integrations.github`,
+      );
+    }
+
     try {
       return await resolveGithubToken({
         integrations: this.integrations,
@@ -121,15 +164,17 @@ export class ScmClientFactory {
         organization,
         repository,
       });
-    } catch (err) {
+    } catch {
       if (hasProvidedToken) {
         this.logger.warn(
           `[ScmClientFactory] GitHub credential resolution failed for host: ${host}, but using provided token`,
         );
-        const integration = this.integrations.github.byHost(host);
-        return { token: '', apiBaseUrl: integration?.config.apiBaseUrl };
+      } else {
+        this.logger.info(
+          `[ScmClientFactory] No GitHub credentials for host: ${host}; public repository access only`,
+        );
       }
-      throw err;
+      return { token: '', apiBaseUrl };
     }
   }
 
@@ -141,35 +186,24 @@ export class ScmClientFactory {
     apiBaseUrl?: string;
   } {
     const integration = this.integrations.gitlab.byHost(host);
+    const token = integration?.config.token;
+    const apiBaseUrl = integration?.config.apiBaseUrl;
+
     if (!integration) {
-      if (hasProvidedToken) {
-        this.logger.warn(
-          `[ScmClientFactory] No GitLab integration configured for host: ${host}, but using provided token`,
-        );
-        return { token: '' };
-      }
       throw new Error(
         `No GitLab integration configured for host: ${host}. ` +
           `Please configure it in app-config.yaml under integrations.gitlab`,
       );
-    }
-
-    const config = integration.config;
-    const token = config.token;
-
-    if (!token && !hasProvidedToken) {
-      throw new Error(
-        `No token configured for GitLab host: ${host}. ` +
-          `Please add a token to the GitLab integration in app-config.yaml`,
+    } else if (token || hasProvidedToken) {
+      this.logger.debug(
+        `[ScmClientFactory] Using GitLab integration for host: ${host}`,
+      );
+    } else {
+      this.logger.info(
+        `[ScmClientFactory] No token configured for GitLab host: ${host}; public repository access only`,
       );
     }
 
-    this.logger.debug(
-      `[ScmClientFactory] Using GitLab integration for host: ${host}`,
-    );
-    return {
-      token: token || '',
-      apiBaseUrl: config.apiBaseUrl,
-    };
+    return { token: token || '', apiBaseUrl };
   }
 }

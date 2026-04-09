@@ -8,6 +8,7 @@ import {
 } from '@backstage/core-plugin-api';
 import { catalogApiRef } from '@backstage/plugin-catalog-react';
 import { Entity } from '@backstage/catalog-model';
+import { SCM_INTEGRATION_AUTH_FAILED_CODE } from '@ansible/backstage-rhaap-common/constants';
 import { RepositoryDetailsPage } from './RepositoryDetailsPage';
 
 const mockNavigate = jest.fn();
@@ -273,6 +274,58 @@ describe('RepositoryDetailsPage', () => {
         expect.stringContaining('/ansible/git/file-content'),
       );
     });
+  });
+
+  it('shows SCM integration auth error when backend returns integration auth for readme', async () => {
+    mockFetchApi.fetch.mockImplementation((url: string) => {
+      if (url.includes('/ansible/git/file-content')) {
+        return Promise.resolve({
+          ok: false,
+          status: 401,
+          text: () =>
+            Promise.resolve(
+              JSON.stringify({
+                code: SCM_INTEGRATION_AUTH_FAILED_CODE,
+                error: 'Bad credentials',
+              }),
+            ),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve(''),
+      });
+    });
+
+    await renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('SCM integration unavailable'),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(
+        /This repository could not be loaded from the source repository/i,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('does not show SCM auth error when backend returns a non-auth readme failure', async () => {
+    mockFetchApi.fetch.mockResolvedValue({
+      ok: false,
+      status: 404,
+      text: () => Promise.resolve('{"error":"not found"}'),
+    });
+
+    await renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('README')).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText('SCM integration unavailable'),
+    ).not.toBeInTheDocument();
   });
 
   it('handles catalog API errors gracefully', async () => {

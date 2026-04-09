@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type ReactNode } from 'react';
 import {
   Box,
   Collapse,
@@ -16,6 +16,18 @@ import ExpandMoreIcon from '@material-ui/icons/ExpandMore';
 import ExpandLessIcon from '@material-ui/icons/ExpandLess';
 
 import { NotificationCardProps, NotificationSeverity } from './types';
+
+function hasRenderableDescription(
+  description: string | ReactNode | undefined,
+): boolean {
+  if (description === undefined || description === null) {
+    return false;
+  }
+  if (typeof description === 'string') {
+    return description.trim().length > 0;
+  }
+  return true;
+}
 
 const severityColors: Record<
   NotificationSeverity,
@@ -78,12 +90,12 @@ const useStyles = makeStyles(theme => ({
     },
   },
   cardContent: {
-    padding: theme.spacing(1.5, 2),
+    padding: theme.spacing(1.5, 2.5, 1.5, 1),
     display: 'flex',
     alignItems: 'flex-start',
   },
   expandButtonContainer: {
-    marginRight: theme.spacing(0.5),
+    marginRight: theme.spacing(0.25),
     display: 'flex',
     alignItems: 'center',
     marginTop: -2,
@@ -96,11 +108,11 @@ const useStyles = makeStyles(theme => ({
     color: theme.palette.text.secondary,
   },
   expandPlaceholder: {
-    width: 28,
-    marginRight: theme.spacing(0.5),
+    width: 24,
+    marginRight: theme.spacing(0.25),
   },
   iconContainer: {
-    marginRight: theme.spacing(1.5),
+    marginRight: theme.spacing(1),
     display: 'flex',
     alignItems: 'center',
     paddingTop: 2,
@@ -114,18 +126,24 @@ const useStyles = makeStyles(theme => ({
   },
   header: {
     display: 'flex',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
+    gap: theme.spacing(1),
   },
   title: {
+    flex: 1,
+    minWidth: 0,
     fontWeight: 600,
     fontSize: '0.95rem',
     color: theme.palette.text.primary,
+    overflowWrap: 'break-word',
+    wordBreak: 'break-word',
   },
   closeButton: {
+    flexShrink: 0,
     padding: 4,
     marginTop: -4,
-    marginRight: -8,
+    marginRight: 0,
   },
   closeIcon: {
     fontSize: '1.1rem',
@@ -136,6 +154,8 @@ const useStyles = makeStyles(theme => ({
     fontSize: '0.85rem',
     color: theme.palette.text.secondary,
     lineHeight: 1.4,
+    overflowWrap: 'break-word',
+    wordBreak: 'break-word',
   },
   itemsList: {
     marginTop: theme.spacing(1),
@@ -146,6 +166,8 @@ const useStyles = makeStyles(theme => ({
     fontSize: '0.85rem',
     color: theme.palette.text.secondary,
     lineHeight: 1.6,
+    overflowWrap: 'break-word',
+    wordBreak: 'break-word',
     '&::marker': {
       color: theme.palette.text.disabled,
     },
@@ -260,8 +282,8 @@ export const NotificationCard = ({
             </IconButton>
           </Box>
 
-          {notification.description && (
-            <Typography className={classes.description}>
+          {hasRenderableDescription(notification.description) && (
+            <Typography component="div" className={classes.description}>
               {notification.description}
             </Typography>
           )}

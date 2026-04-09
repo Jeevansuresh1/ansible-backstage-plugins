@@ -40,6 +40,108 @@ export const ansibleApiRef = createApiRef<AnsibleApi>({
   id: 'ansible',
 });
 
+/** Target registry for pushing a built execution environment image. */
+export type EEBuildRegistryType = 'pah' | 'custom';
+
+export interface EEBuildRequest {
+  entityRef: string;
+  registryType: EEBuildRegistryType;
+  /**
+   * Registry URL sent for every build: PAH uses `ansible.rhaap.baseUrl` from app-config;
+   * custom uses the user-entered URL.
+   */
+  customRegistryUrl: string;
+  imageName: string;
+  imageTag: string;
+  verifyTls: boolean;
+}
+
+export interface EEBuildResult {
+  accepted: boolean;
+  /** CI/workflow run id when returned by the catalog build API (JSON `workflowId` or `workflow_id`). */
+  workflowId?: string;
+  /** Link to the workflow run when returned */
+  workflowUrl?: string;
+  message?: string;
+}
+
+/** Sent as `X-Github-Token` so the catalog backend can call GitHub `workflow_dispatch`. */
+export interface EEBuildTriggerOptions {
+  githubToken: string;
+}
+
+function workflowIdFromJsonValue(raw: unknown): string | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    return t.length > 0 ? t : undefined;
+  }
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return String(raw);
+  }
+  if (typeof raw === 'boolean') {
+    return raw ? 'true' : 'false';
+  }
+  return undefined;
+}
+
+function workflowUrlFromJsonValue(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') {
+    return undefined;
+  }
+  const t = raw.trim();
+  return t.length > 0 ? t : undefined;
+}
+
+function userTextFromBuildJson(
+  data: Record<string, unknown>,
+): string | undefined {
+  const fromMessage =
+    typeof data.message === 'string' ? data.message.trim() : '';
+  if (fromMessage.length > 0) {
+    return fromMessage;
+  }
+  const fromError = typeof data.error === 'string' ? data.error.trim() : '';
+  return fromError.length > 0 ? fromError : undefined;
+}
+
+function parseExecutionEnvironmentBuildResponse(text: string): {
+  workflowId?: string;
+  workflowUrl?: string;
+  message?: string;
+} {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    const data = JSON.parse(trimmed) as Record<string, unknown>;
+    const workflowId = workflowIdFromJsonValue(
+      data.workflowId ?? data.workflow_id,
+    );
+    const workflowUrl = workflowUrlFromJsonValue(
+      data.workflowUrl ?? data.workflow_url,
+    );
+    const message = userTextFromBuildJson(data);
+    return { workflowId, workflowUrl, message };
+  } catch {
+    return { message: trimmed };
+  }
+}
+
+export interface EEBuildApi {
+  triggerBuild(
+    request: EEBuildRequest,
+    options: EEBuildTriggerOptions,
+  ): Promise<EEBuildResult>;
+}
+
+export const eeBuildApiRef = createApiRef<EEBuildApi>({
+  id: 'plugin.self-service.ee-build',
+});
+
 export const rhAapAuthApiRef: ApiRef<CustomAuthApiRefType> = createApiRef({
   id: 'ansible.auth.rhaap',
 });
@@ -122,6 +224,65 @@ export const AAPApis: ApiFactory<
   deps: { discoveryApi: discoveryApiRef, fetchApi: fetchApiRef },
   factory: ({ discoveryApi, fetchApi }) =>
     new AnsibleApiClient({ discoveryApi, fetchApi }),
+});
+
+export class EEBuildApiClient implements EEBuildApi {
+  private readonly discoveryApi: DiscoveryApi;
+  private readonly fetchApi: FetchApi;
+
+  constructor(options: { discoveryApi: DiscoveryApi; fetchApi: FetchApi }) {
+    this.discoveryApi = options.discoveryApi;
+    this.fetchApi = options.fetchApi;
+  }
+
+  async triggerBuild(
+    request: EEBuildRequest,
+    options: EEBuildTriggerOptions,
+  ): Promise<EEBuildResult> {
+    const baseUrl = await this.discoveryApi.getBaseUrl('catalog');
+    try {
+      const response = await this.fetchApi.fetch(
+        `${baseUrl}/ansible/ee/build`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Github-Token': options.githubToken,
+          },
+          body: JSON.stringify(request),
+        },
+      );
+      const text = await response.text();
+      if (response.ok) {
+        const parsed = parseExecutionEnvironmentBuildResponse(text);
+        return {
+          accepted: true,
+          workflowId: parsed.workflowId,
+          workflowUrl: parsed.workflowUrl,
+          message: parsed.message,
+        };
+      }
+      const parsed = parseExecutionEnvironmentBuildResponse(text);
+      return {
+        accepted: false,
+        message:
+          parsed.message || text || `Request failed (${response.status})`,
+      };
+    } catch (e) {
+      return { accepted: false, message: String(e) };
+    }
+  }
+}
+
+export const EEBuildApis: ApiFactory<
+  EEBuildApi,
+  EEBuildApiClient,
+  { discoveryApi: DiscoveryApi; fetchApi: FetchApi }
+> = createApiFactory({
+  api: eeBuildApiRef,
+  deps: { discoveryApi: discoveryApiRef, fetchApi: fetchApiRef },
+  factory: ({ discoveryApi, fetchApi }) =>
+    new EEBuildApiClient({ discoveryApi, fetchApi }),
 });
 
 export const AapAuthApi: AAPAuthApiFactoryType = createApiFactory({

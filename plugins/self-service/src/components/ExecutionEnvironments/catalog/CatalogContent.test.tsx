@@ -1,6 +1,11 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { TestApiProvider } from '@backstage/test-utils';
+import { configApiRef } from '@backstage/core-plugin-api';
+import { scmAuthApiRef } from '@backstage/integration-react';
 import { catalogApiRef } from '@backstage/plugin-catalog-react';
+import { eeBuildApiRef } from '../../../apis';
+import { NotificationProvider, notificationStore } from '../../notifications';
+import { EE_BUILD_PENDING_SESSION_KEY } from './eeBuildSession';
 import { MemoryRouter } from 'react-router-dom';
 import { EEListPage } from './CatalogContent';
 import { ThemeProvider, createMuiTheme } from '@material-ui/core/styles';
@@ -194,6 +199,20 @@ const entityB = createEntity(
   '2024-01-02T10:00:00Z',
 );
 
+/** EE published to GitHub — Build appears in the row actions menu */
+const entityGitHubPublished: Entity = {
+  ...entityA,
+  metadata: {
+    ...entityA.metadata,
+    annotations: {
+      ...entityA.metadata.annotations,
+      'backstage.io/source-location':
+        'url:https://github.com/org/repo/tree/main/ee-one/',
+      'ansible.io/scm-provider': 'github',
+    },
+  },
+};
+
 const entityC = createEntity(
   'ee-three',
   '3',
@@ -211,6 +230,22 @@ const entityWithoutAnsibleTag = createEntity(
 );
 
 const theme = createMuiTheme();
+
+const mockScmAuthApi = {
+  getCredentials: jest.fn().mockResolvedValue({ token: 't', headers: {} }),
+};
+const mockEeBuildApi = {
+  triggerBuild: jest.fn().mockResolvedValue({ accepted: true }),
+};
+
+const mockConfigApi = {
+  getOptionalString: jest.fn((key: string): string | undefined => {
+    if (key === 'ansible.rhaap.baseUrl') {
+      return 'https://aap.example.com';
+    }
+    return undefined;
+  }),
+};
 
 // ------------------ Render helper ------------------
 const renderWithCatalogApi = (
@@ -233,10 +268,19 @@ const renderWithCatalogApi = (
   };
   return render(
     <MemoryRouter initialEntries={['/']}>
-      <TestApiProvider apis={[[catalogApiRef, mockCatalogApi]]}>
-        <ThemeProvider theme={theme}>
-          <EEListPage onTabSwitch={jest.fn()} />
-        </ThemeProvider>
+      <TestApiProvider
+        apis={[
+          [configApiRef, mockConfigApi],
+          [catalogApiRef, mockCatalogApi],
+          [scmAuthApiRef, mockScmAuthApi],
+          [eeBuildApiRef, mockEeBuildApi],
+        ]}
+      >
+        <NotificationProvider>
+          <ThemeProvider theme={theme}>
+            <EEListPage onTabSwitch={jest.fn()} />
+          </ThemeProvider>
+        </NotificationProvider>
       </TestApiProvider>
     </MemoryRouter>,
   );
@@ -247,6 +291,8 @@ describe('EEListPage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockNavigate.mockClear();
+    sessionStorage.clear();
+    notificationStore.clearAll();
   });
 
   describe('Basic rendering', () => {
@@ -812,8 +858,10 @@ describe('EEListPage', () => {
       windowOpenSpy.mockRestore();
     });
 
-    test('shows Build, Edit, View, Delete when download-experience is false', async () => {
-      renderWithCatalogApi(() => Promise.resolve({ items: [entityA] }));
+    test('shows Build, Edit, View, Delete when download-experience is false and EE is on GitHub', async () => {
+      renderWithCatalogApi(() =>
+        Promise.resolve({ items: [entityGitHubPublished] }),
+      );
 
       await waitFor(() =>
         expect(screen.getByTestId('stubbed-table-title')).toBeInTheDocument(),
@@ -886,11 +934,7 @@ describe('EEListPage', () => {
       ).not.toBeInTheDocument();
     });
 
-    test('Build menu item does not open a URL (no-op until future implementation)', async () => {
-      const windowOpenSpy = jest
-        .spyOn(window, 'open')
-        .mockImplementation(() => null);
-
+    test('omits Build menu item when entity is not published to GitHub', async () => {
       renderWithCatalogApi(() => Promise.resolve({ items: [entityA] }));
 
       await waitFor(() =>
@@ -900,13 +944,91 @@ describe('EEListPage', () => {
       const actionsButton = screen.getByRole('button', { name: /actions/i });
       fireEvent.click(actionsButton);
 
-      const buildMenuItem = await screen.findByRole('menuitem', {
-        name: /build/i,
+      await waitFor(() => {
+        expect(
+          screen.getByRole('menuitem', { name: /edit/i }),
+        ).toBeInTheDocument();
       });
-      fireEvent.click(buildMenuItem);
+      expect(
+        screen.queryByRole('menuitem', { name: /build/i }),
+      ).not.toBeInTheDocument();
+    });
 
-      expect(windowOpenSpy).not.toHaveBeenCalled();
-      windowOpenSpy.mockRestore();
+    test('Build opens dialog when entity has GitHub SCM annotations', async () => {
+      const entityWithScm = {
+        ...entityA,
+        metadata: {
+          ...entityA.metadata,
+          annotations: {
+            ...entityA.metadata.annotations,
+            'backstage.io/source-location':
+              'url:https://github.com/org/repo/tree/main/ee-one/',
+            'ansible.io/scm-provider': 'github',
+          },
+        },
+      };
+
+      renderWithCatalogApi(() => Promise.resolve({ items: [entityWithScm] }));
+
+      await waitFor(() =>
+        expect(screen.getByTestId('stubbed-table-title')).toBeInTheDocument(),
+      );
+
+      const actionsButton = screen.getByRole('button', { name: /actions/i });
+      fireEvent.click(actionsButton);
+      fireEvent.click(await screen.findByRole('menuitem', { name: /build/i }));
+
+      await waitFor(() =>
+        expect(mockScmAuthApi.getCredentials).toHaveBeenCalledWith({
+          url: 'https://github.com/org/repo',
+        }),
+      );
+      expect(
+        await screen.findByText('Build execution environment image'),
+      ).toBeInTheDocument();
+    });
+
+    test('opens build dialog after pending session from OAuth reload', async () => {
+      const entityWithScm = {
+        ...entityA,
+        metadata: {
+          ...entityA.metadata,
+          namespace: 'default',
+          annotations: {
+            ...entityA.metadata.annotations,
+            'backstage.io/source-location':
+              'url:https://github.com/org/repo/tree/main/ee-one/',
+            'ansible.io/scm-provider': 'github',
+          },
+        },
+      };
+      sessionStorage.setItem(
+        EE_BUILD_PENDING_SESSION_KEY,
+        JSON.stringify({
+          entityRef: 'component:default/ee-one',
+          savedAt: Date.now(),
+        }),
+      );
+
+      const getEntityByRef = jest.fn((ref: string) =>
+        ref === 'component:default/ee-one'
+          ? Promise.resolve(entityWithScm)
+          : Promise.resolve({
+              apiVersion: 'backstage.io/v1alpha1',
+              kind: 'User',
+              metadata: { name: ref },
+            }),
+      );
+
+      renderWithCatalogApi(
+        () => Promise.resolve({ items: [entityWithScm] }),
+        getEntityByRef,
+      );
+
+      expect(
+        await screen.findByText('Build execution environment image'),
+      ).toBeInTheDocument();
+      expect(getEntityByRef).toHaveBeenCalledWith('component:default/ee-one');
     });
 
     test('Edit menu item does not open URL when entity has no edit URL or source location', async () => {
@@ -1689,15 +1811,20 @@ describe('EEListPage', () => {
         <MemoryRouter initialEntries={['/']}>
           <TestApiProvider
             apis={[
+              [configApiRef, mockConfigApi],
               [
                 catalogApiRef,
                 { getEntities: () => Promise.resolve({ items: [] }) },
               ],
+              [scmAuthApiRef, mockScmAuthApi],
+              [eeBuildApiRef, mockEeBuildApi],
             ]}
           >
-            <ThemeProvider theme={theme}>
-              <EntityCatalogContent onTabSwitch={mockOnTabSwitch} />
-            </ThemeProvider>
+            <NotificationProvider>
+              <ThemeProvider theme={theme}>
+                <EntityCatalogContent onTabSwitch={mockOnTabSwitch} />
+              </ThemeProvider>
+            </NotificationProvider>
           </TestApiProvider>
         </MemoryRouter>,
       );
@@ -1793,15 +1920,20 @@ describe('EEListPage', () => {
         <MemoryRouter initialEntries={['/']}>
           <TestApiProvider
             apis={[
+              [configApiRef, mockConfigApi],
               [
                 catalogApiRef,
                 { getEntities: () => Promise.resolve({ items: [] }) },
               ],
+              [scmAuthApiRef, mockScmAuthApi],
+              [eeBuildApiRef, mockEeBuildApi],
             ]}
           >
-            <ThemeProvider theme={theme}>
-              <EEListPage onTabSwitch={mockOnTabSwitch} />
-            </ThemeProvider>
+            <NotificationProvider>
+              <ThemeProvider theme={theme}>
+                <EEListPage onTabSwitch={mockOnTabSwitch} />
+              </ThemeProvider>
+            </NotificationProvider>
           </TestApiProvider>
         </MemoryRouter>,
       );

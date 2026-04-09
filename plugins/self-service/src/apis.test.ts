@@ -2,6 +2,7 @@ import {
   AnsibleApiClient,
   AAPApis,
   AapAuthApi,
+  EEBuildApiClient,
   ansibleApiRef,
   rhAapAuthApiRef,
 } from './apis.ts';
@@ -224,5 +225,228 @@ describe('Ansible API module', () => {
   it('exports api refs', () => {
     expect(ansibleApiRef).toBeDefined();
     expect(rhAapAuthApiRef).toBeDefined();
+  });
+});
+
+describe('EEBuildApiClient', () => {
+  const mockDiscovery = {
+    getBaseUrl: jest.fn().mockResolvedValue('http://catalog.example'),
+  };
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('parses workflowId from JSON body on success', async () => {
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        ok: true,
+        text: async () =>
+          JSON.stringify({ workflowId: 'run-123', message: 'queued' }),
+      }),
+    };
+    const client = new EEBuildApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.triggerBuild(
+      {
+        entityRef: 'component:default/ee1',
+        registryType: 'pah',
+        customRegistryUrl: 'https://registry.example/pah',
+        imageName: 'ns/ee',
+        imageTag: '1',
+        verifyTls: true,
+      },
+      { githubToken: 'ghp_test_token' },
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      workflowId: 'run-123',
+      workflowUrl: undefined,
+      message: 'queued',
+    });
+    expect(mockFetch.fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'Content-Type': 'application/json',
+          'X-Github-Token': 'ghp_test_token',
+        }),
+        body: expect.stringContaining(
+          '"customRegistryUrl":"https://registry.example/pah"',
+        ),
+      }),
+    );
+  });
+
+  it('parses workflow_id (snake_case) from JSON body on success', async () => {
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        ok: true,
+        text: async () => JSON.stringify({ workflow_id: 999 }),
+      }),
+    };
+    const client = new EEBuildApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.triggerBuild(
+      {
+        entityRef: 'component:default/ee1',
+        registryType: 'pah',
+        customRegistryUrl: 'https://r.example',
+        imageName: 'ns/ee',
+        imageTag: '1',
+        verifyTls: true,
+      },
+      { githubToken: 'tok' },
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      workflowId: '999',
+      workflowUrl: undefined,
+      message: undefined,
+    });
+  });
+
+  it('parses workflow_url (snake_case) on success', async () => {
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: 'Build started',
+            workflow_id: 42,
+            workflow_url: 'https://github.com/acme/repo/actions/runs/42',
+          }),
+      }),
+    };
+    const client = new EEBuildApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.triggerBuild(
+      {
+        entityRef: 'component:default/ee1',
+        registryType: 'pah',
+        customRegistryUrl: 'https://r.example',
+        imageName: 'ns/ee',
+        imageTag: '1',
+        verifyTls: true,
+      },
+      { githubToken: 'tok' },
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      workflowId: '42',
+      workflowUrl: 'https://github.com/acme/repo/actions/runs/42',
+      message: 'Build started',
+    });
+  });
+
+  it('ignores workflowId when it is a non-primitive JSON value', async () => {
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        ok: true,
+        text: async () =>
+          JSON.stringify({ workflowId: { nested: 'x' }, message: 'ok' }),
+      }),
+    };
+    const client = new EEBuildApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.triggerBuild(
+      {
+        entityRef: 'component:default/ee1',
+        registryType: 'pah',
+        customRegistryUrl: 'https://r.example',
+        imageName: 'ns/ee',
+        imageTag: '1',
+        verifyTls: true,
+      },
+      { githubToken: 'tok' },
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      workflowId: undefined,
+      workflowUrl: undefined,
+      message: 'ok',
+    });
+  });
+
+  it('accepts success with empty body', async () => {
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        ok: true,
+        text: async () => '',
+      }),
+    };
+    const client = new EEBuildApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.triggerBuild(
+      {
+        entityRef: 'component:default/ee1',
+        registryType: 'pah',
+        customRegistryUrl: 'https://r.example',
+        imageName: 'ns/ee',
+        imageTag: '1',
+        verifyTls: true,
+      },
+      { githubToken: 'tok' },
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      workflowId: undefined,
+      workflowUrl: undefined,
+      message: undefined,
+    });
+  });
+
+  it('uses JSON error field on non-OK response instead of raw body', async () => {
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        text: async () =>
+          JSON.stringify({
+            error: 'GitHub workflow_dispatch failed: invalid inputs',
+          }),
+      }),
+    };
+    const client = new EEBuildApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.triggerBuild(
+      {
+        entityRef: 'component:default/ee1',
+        registryType: 'pah',
+        customRegistryUrl: 'https://r.example',
+        imageName: 'ns/ee',
+        imageTag: '1',
+        verifyTls: true,
+      },
+      { githubToken: 'tok' },
+    );
+
+    expect(result).toEqual({
+      accepted: false,
+      message: 'GitHub workflow_dispatch failed: invalid inputs',
+    });
   });
 });

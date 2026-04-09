@@ -1,8 +1,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Progress, Table, TableColumn } from '@backstage/core-components';
 import {
+  Backdrop,
   Box,
   Chip,
+  CircularProgress,
   FormControl,
   Grid,
   IconButton,
@@ -32,7 +34,13 @@ import OpenInNew from '@material-ui/icons/OpenInNew';
 import { ANNOTATION_EDIT_URL, Entity } from '@backstage/catalog-model';
 import { useApi } from '@backstage/core-plugin-api';
 import { CreateCatalog } from './CreateCatalog';
-import { toEEDefinitionUrl, downloadEntityAsTarArchive } from './helpers';
+import { EEBuildDialog } from './EEBuildDialog';
+import {
+  toEEDefinitionUrl,
+  downloadEntityAsTarArchive,
+  isEntityPublishedToGithub,
+} from './helpers';
+import { useEEBuildFlow } from './useEEBuildFlow';
 import { EntityLinkButton } from '../../common';
 
 const DESCRIPTION_TRUNCATE_LENGTH = 30;
@@ -206,6 +214,14 @@ export const EEListPage = ({
     null,
   );
   const { filters, updateFilters } = useEntityList();
+  const {
+    startBuildFlow,
+    authBusy,
+    dialogOpen,
+    buildEntity,
+    githubToken,
+    closeDialog,
+  } = useEEBuildFlow();
 
   const isMountedRef = useRef(true);
 
@@ -620,15 +636,24 @@ export const EEListPage = ({
                         </MenuItem>,
                       ]
                     : [
-                        <MenuItem
-                          key="build"
-                          onClick={() => {
-                            handleActionsMenuClose();
-                            // TODO: Build action - future implementation (e.g. trigger EE build)
-                          }}
-                        >
-                          Build
-                        </MenuItem>,
+                        ...(isEntityPublishedToGithub(actionsMenuEntity)
+                          ? [
+                              <MenuItem
+                                key="build"
+                                onClick={() => {
+                                  const targetEntity = actionsMenuEntity;
+                                  handleActionsMenuClose();
+                                  if (targetEntity) {
+                                    startBuildFlow(targetEntity).catch(
+                                      () => undefined,
+                                    );
+                                  }
+                                }}
+                              >
+                                Build
+                              </MenuItem>,
+                            ]
+                          : []),
                         <MenuItem
                           key="edit"
                           onClick={() => {
@@ -731,6 +756,15 @@ export const EEListPage = ({
                 }}
               />
             )}
+            <Backdrop open={authBusy} style={{ zIndex: 1400, color: '#fff' }}>
+              <CircularProgress color="inherit" />
+            </Backdrop>
+            <EEBuildDialog
+              open={dialogOpen}
+              entity={buildEntity}
+              githubToken={githubToken}
+              onClose={closeDialog}
+            />
           </CatalogFilterLayout.Content>
         </CatalogFilterLayout>
       ) : (

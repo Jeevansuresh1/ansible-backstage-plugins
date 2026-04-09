@@ -20,7 +20,11 @@ import { CollectionReadmeCard } from './CollectionReadmeCard';
 import { RepositoryBadge } from './RepositoryBadge';
 import { useCollectionsStyles } from './styles';
 import { rootRouteRef } from '../../routes';
-import { EmptyState, fetchReadmeFromBackend } from '../common';
+import {
+  EmptyState,
+  fetchGitFileContentFromBackend,
+  ScmIntegrationAuthError,
+} from '../common';
 
 const CollectionDetailsPageInner = () => {
   const classes = useCollectionsStyles();
@@ -40,6 +44,7 @@ const CollectionDetailsPageInner = () => {
   const [lastFailedSync, setLastFailedSync] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [tab, setTab] = useState(0);
+  const [scmIntegrationAuthError, setScmIntegrationAuthError] = useState(false);
 
   const fetchEntity = useCallback(() => {
     if (!collectionName) return;
@@ -71,6 +76,10 @@ const CollectionDetailsPageInner = () => {
   useEffect(() => {
     fetchEntity();
   }, [fetchEntity]);
+
+  useEffect(() => {
+    setScmIntegrationAuthError(false);
+  }, [collectionName]);
 
   useEffect(() => {
     if (!entity) return;
@@ -135,6 +144,7 @@ const CollectionDetailsPageInner = () => {
       setReadmeContent(htmlReadme);
       setIsHtmlReadme(true);
       setReadmeLoading(false);
+      setScmIntegrationAuthError(false);
       return;
     }
 
@@ -146,6 +156,7 @@ const CollectionDetailsPageInner = () => {
 
     if (!readmeUrl) {
       setReadmeContent('');
+      setScmIntegrationAuthError(false);
       return;
     }
 
@@ -162,7 +173,7 @@ const CollectionDetailsPageInner = () => {
     setReadmeLoading(true);
 
     if (canUseBackend) {
-      fetchReadmeFromBackend(discoveryApi, fetchApi, {
+      fetchGitFileContentFromBackend(discoveryApi, fetchApi, {
         scmProvider,
         scmHost,
         scmOrg,
@@ -170,11 +181,26 @@ const CollectionDetailsPageInner = () => {
         filePath,
         gitRef,
       })
-        .then(setReadmeContent)
-        .catch(() => setReadmeContent(''))
+        .then(outcome => {
+          if (outcome.ok) {
+            setReadmeContent(outcome.data);
+            setScmIntegrationAuthError(false);
+          } else if (outcome.reason === 'integration_auth') {
+            setScmIntegrationAuthError(true);
+          } else {
+            setReadmeContent('');
+            setScmIntegrationAuthError(false);
+          }
+        })
+        .catch(() => {
+          setReadmeContent('');
+          setScmIntegrationAuthError(false);
+        })
         .finally(() => setReadmeLoading(false));
       return;
     }
+
+    setScmIntegrationAuthError(false);
 
     let fetchUrl = readmeUrl;
     if (
@@ -255,6 +281,18 @@ const CollectionDetailsPageInner = () => {
           onNavigateToCatalog={handleNavigateToCatalog}
         />
         <EmptyState />
+      </Box>
+    );
+  }
+
+  if (scmIntegrationAuthError) {
+    return (
+      <Box className={classes.detailsContainer}>
+        <CollectionBreadcrumbs
+          collectionName={collectionFullName}
+          onNavigateToCatalog={handleNavigateToCatalog}
+        />
+        <ScmIntegrationAuthError resourceLabel="collection" />
       </Box>
     );
   }
