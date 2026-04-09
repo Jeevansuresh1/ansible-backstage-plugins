@@ -461,7 +461,8 @@ describe('self-service', () => {
 
       await waitFor(() => {
         expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
-        expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(1);
+        // Unchanged AAP list after sync triggers a delayed second autocomplete fetch.
+        expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(2);
       });
     });
 
@@ -491,7 +492,7 @@ describe('self-service', () => {
       expect(mockScaffolderApi.autocomplete).not.toHaveBeenCalled();
     });
 
-    it('should not remount when templates are unchanged after sync', async () => {
+    it('should remount EntityListProvider after template sync even when the AAP list is unchanged', async () => {
       const entityRefs = ['component:default/e1'];
       const tags = ['tag1'];
       mockCatalogApi.getEntityFacets.mockResolvedValue(
@@ -508,7 +509,9 @@ describe('self-service', () => {
 
       (mockScaffolderApi.autocomplete as jest.Mock)
         .mockResolvedValueOnce(sameResults)
-        .mockResolvedValueOnce(sameResults);
+        .mockResolvedValueOnce(sameResults)
+        .mockResolvedValueOnce(sameResults)
+        .mockResolvedValue(sameResults);
 
       await render(<HomeComponent />);
 
@@ -521,15 +524,20 @@ describe('self-service', () => {
 
       await triggerTemplateSync();
 
-      await waitFor(() => {
-        expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
-        expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(2);
-      });
-
-      // EntityListProvider should NOT have remounted — no new getEntityFacets calls
-      expect(mockCatalogApi.getEntityFacets.mock.calls.length).toBe(
-        facetCallsBeforeSync,
+      await waitFor(
+        () => {
+          expect(mockAnsibleApi.syncTemplates).toHaveBeenCalled();
+          // Mount + post-sync fetch + stale-list retry
+          expect(mockScaffolderApi.autocomplete).toHaveBeenCalledTimes(3);
+        },
+        { timeout: 4000 },
       );
+
+      await waitFor(() => {
+        expect(
+          mockCatalogApi.getEntityFacets.mock.calls.length,
+        ).toBeGreaterThan(facetCallsBeforeSync);
+      });
     });
 
     it('should remount when a new template is added after sync', async () => {
