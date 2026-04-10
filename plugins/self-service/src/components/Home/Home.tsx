@@ -309,7 +309,7 @@ export const HomeComponent = () => {
   // Auto-refresh catalog data after a short delay so that recently
   // imported templates (via "Add Template") appear without a manual reload.
   useEffect(() => {
-    const CATALOG_SETTLE_MS = 700;
+    const CATALOG_SETTLE_MS = 900;
     const timerId = setTimeout(() => {
       setSyncKey(prev => prev + 1);
     }, CATALOG_SETTLE_MS);
