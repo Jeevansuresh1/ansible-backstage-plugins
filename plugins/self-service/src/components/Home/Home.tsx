@@ -75,11 +75,10 @@ const isHomePageTemplate = (
   if (entity.spec?.type?.includes('execution-environment')) {
     return false;
   }
-  return jobTemplates.some(({ id }) =>
-    entity.metadata.aapJobTemplateId
-      ? id === entity.metadata.aapJobTemplateId
-      : true,
-  );
+  if (!entity.metadata.aapJobTemplateId) {
+    return true;
+  }
+  return jobTemplates.some(({ id }) => id === entity.metadata.aapJobTemplateId);
 };
 
 const HomeTagPicker = ({
@@ -306,15 +305,21 @@ export const HomeComponent = () => {
     fetchJobTemplates();
   }, [fetchJobTemplates]);
 
-  // Auto-refresh catalog data after a short delay so that recently
-  // imported templates (via "Add Template") appear without a manual reload.
+  // After returning from "Add Template", schedule a catalog refresh so the
+  // newly imported template has time to be processed before we re-query.
   useEffect(() => {
-    const CATALOG_SETTLE_MS = 900;
+    if (loading) return undefined;
+    const pending = sessionStorage.getItem('ansible-template-import-pending');
+    if (!pending) return undefined;
+    sessionStorage.removeItem('ansible-template-import-pending');
+    const CATALOG_SETTLE_MS = 3000;
     const timerId = setTimeout(() => {
       setSyncKey(prev => prev + 1);
+      setSnackbarMsg('Templates refreshed');
+      setShowSnackbar(true);
     }, CATALOG_SETTLE_MS);
     return () => clearTimeout(timerId);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   useEffect(() => {
     if (syncOptions.length > 0) {
@@ -398,7 +403,10 @@ export const HomeComponent = () => {
         {allowed && (
           <Button
             data-testid="add-template-button"
-            onClick={() => navigate(`${rootLink()}/catalog-import`)}
+            onClick={() => {
+              sessionStorage.setItem('ansible-template-import-pending', '1');
+              navigate(`${rootLink()}/catalog-import`);
+            }}
             variant="contained"
           >
             Add Template
@@ -446,20 +454,8 @@ export const HomeComponent = () => {
                   <TemplateGroups
                     groups={[
                       {
-                        filter: (entity: TemplateEntityV1beta3) => {
-                          const hasExecutionEnvironmentType =
-                            entity.spec?.type?.includes(
-                              'execution-environment',
-                            ) ?? false;
-                          if (hasExecutionEnvironmentType) {
-                            return false;
-                          }
-                          return jobTemplates.some(({ id }) =>
-                            entity.metadata.aapJobTemplateId
-                              ? id === entity.metadata.aapJobTemplateId
-                              : true,
-                          );
-                        },
+                        filter: (entity: TemplateEntityV1beta3) =>
+                          isHomePageTemplate(entity, jobTemplates),
                       },
                     ]}
                     TemplateCardComponent={WizardCard}
