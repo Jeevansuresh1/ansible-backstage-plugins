@@ -305,13 +305,11 @@ export const HomeComponent = () => {
     fetchJobTemplates();
   }, [fetchJobTemplates]);
 
-  // After returning from "Add Template", schedule a catalog refresh so the
-  // newly imported template has time to be processed before we re-query.
+  // After fetchJobTemplates completes, schedule a catalog refresh so that
+  // recently imported templates (via "Add Template") have time to be
+  // processed by the catalog backend before we re-query.
   useEffect(() => {
     if (loading) return undefined;
-    const pending = sessionStorage.getItem('ansible-template-import-pending');
-    if (!pending) return undefined;
-    sessionStorage.removeItem('ansible-template-import-pending');
     const CATALOG_SETTLE_MS = 3000;
     const timerId = setTimeout(() => {
       setSyncKey(prev => prev + 1);
@@ -403,10 +401,7 @@ export const HomeComponent = () => {
         {allowed && (
           <Button
             data-testid="add-template-button"
-            onClick={() => {
-              sessionStorage.setItem('ansible-template-import-pending', '1');
-              navigate(`${rootLink()}/catalog-import`);
-            }}
+            onClick={() => navigate(`${rootLink()}/catalog-import`)}
             variant="contained"
           >
             Add Template
