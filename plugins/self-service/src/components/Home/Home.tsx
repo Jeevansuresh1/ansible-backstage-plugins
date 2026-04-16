@@ -310,7 +310,7 @@ export const HomeComponent = () => {
   // processed by the catalog backend before we re-query.
   useEffect(() => {
     if (loading) return undefined;
-    const CATALOG_SETTLE_MS = 3000;
+    const CATALOG_SETTLE_MS = 750;
     const timerId = setTimeout(() => {
       setSyncKey(prev => prev + 1);
       setSnackbarMsg('Templates refreshed');
