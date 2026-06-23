@@ -31,4 +31,10 @@ dynamicPlugins:
           to: /self-service/ee
       mountPoints:
         - mountPoint: application/listener
+          importName: AppThemeFixer
+        - mountPoint: application/listener
           importName: LocationListener
+        - importName: AAPLogoutButton
+          mountPoint: global.header/profile
+          config:
+            priority: 100

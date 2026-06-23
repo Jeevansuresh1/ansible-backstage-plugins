@@ -29,7 +29,9 @@ import {
 import { generateReadme } from './templates/readmeTemplate';
 import { generateEETemplate } from './templates/eeTemplate';
 import { eeDefinitionInputSchema } from './schemas/rhaapActionSchemas';
+import type { ZodType } from 'zod';
 
+const eeInputSchema: ZodType = eeDefinitionInputSchema;
 const PAH_SOURCE_PREFIX = 'Private Automation Hub';
 
 /**
@@ -64,12 +66,13 @@ export function createEEDefinitionAction(options: {
   config: Config;
 }) {
   const { frontendUrl, auth, discovery, config } = options;
+  // @ts-expect-error TS2589: complex ZodEffects schema triggers deep type recursion
   return createTemplateAction({
     id: 'ansible:create:ee-definition',
     description: 'Creates Ansible Execution Environment definition files',
     schema: {
       input: {
-        values: () => eeDefinitionInputSchema,
+        values: _z => eeInputSchema,
       },
       output: {
         contextDirName: z => z.string().optional(),
@@ -101,8 +104,9 @@ export function createEEDefinitionAction(options: {
       const tags = values.tags || [];
       const owner = values.owner || ctx.user?.ref || '';
       const buildRegistry = values.buildRegistry || '';
-      const buildImageName = values.buildImageName || '';
+      const buildImageName = values.buildImageName?.trim() || '';
       const registryTlsVerify = values.registryTlsVerify ?? true;
+      const scmProvider = values.scmProvider || 'github';
 
       ctx.output('owner', owner);
 
@@ -138,8 +142,9 @@ export function createEEDefinitionAction(options: {
       try {
         const { scmCollections, nonScmCollections } =
           partitionCollectionsBySourceType(collections);
+        const mergedNonScmCollections = mergeCollections(nonScmCollections);
         const allCollections = normalizeCollectionSources(
-          mergeCollections(nonScmCollections),
+          mergedNonScmCollections,
         );
         const { collections: transformedScmCollections, scmServers } =
           transformScmCollections(scmCollections, config);
@@ -196,10 +201,6 @@ export function createEEDefinitionAction(options: {
         const api = new BackendServiceAPI();
         const tarName = 'ee-scaffold.tar';
 
-        logger.info(
-          `[ansible:create:ee-definition] calling creator service at ${creatorServiceUrl}`,
-        );
-
         // Download and extract the scaffold to a temp dir first, then
         // distribute files: repo-root items (.github, .gitignore, …) stay at
         // workspacePath; EE-specific files go into eeDir (contextDirName/).
@@ -212,6 +213,7 @@ export function createEEDefinitionAction(options: {
           creatorServiceUrl,
           eeConfig,
           tarName,
+          scmProvider,
         );
         await executeShellCommand({
           command: 'tar',
@@ -255,11 +257,22 @@ export function createEEDefinitionAction(options: {
         // defaults to the EE subdirectory instead of the repo root (".").
         await patchWorkflowEeDir(workspacePath, contextDirName);
 
-        // Create merged values for template generation
+        // Create merged values for template generation.
+        // Use pre-normalization collections so the saved template stores the
+        // original UI-facing source strings (e.g. "Private Automation Hub / repo")
+        // rather than the internal identifiers (e.g. "private_hub_repo") that
+        // the CollectionsPicker cannot match against API-returned options.
+        const templateCollections = [
+          ...mergedNonScmCollections,
+          ...scmCollections,
+        ];
         const mergedValues = {
           ...values,
           eeFileName,
-          collections: [...allCollections, ...scmCollections],
+          pahBaseUrl,
+          // Keep user-facing collection sources for README/template defaults.
+          // Normalized sources are only needed for the creator service payload.
+          collections: templateCollections,
           pythonRequirements: allRequirements,
           systemPackages: allPackages,
           additionalBuildSteps,
@@ -298,15 +311,16 @@ export function createEEDefinitionAction(options: {
 
         const eeTemplateContent = generateEETemplate(mergedValues);
 
+        const templatePath = resolvePathWithinDirectory(
+          eeDir,
+          `${eeFileName}-template.yml`,
+        );
+        await fs.writeFile(templatePath, eeTemplateContent);
+        logger.info(
+          `[ansible:create:ee-definition] created EE template.yml at ${templatePath}`,
+        );
+
         if (values.publishToSCM) {
-          const templatePath = resolvePathWithinDirectory(
-            eeDir,
-            `${eeFileName}-template.yml`,
-          );
-          await fs.writeFile(templatePath, eeTemplateContent);
-          logger.info(
-            `[ansible:create:ee-definition] created EE template.yml at ${templatePath}`,
-          );
           const catalogInfoPath = path.join(
             contextDirName,
             'catalog-info.yaml',
@@ -584,7 +598,8 @@ function transformScmCollections(
   const seenServers = new Map<string, ScmServer>();
 
   const transformed = collections.map(c => {
-    const parts = c.source!.split('/').map(s => s.trim());
+    const source = c.source ?? '';
+    const parts = source.split('/').map(s => s.trim());
     const provider = parts[0];
     const canonicalName = parts[1];
     const org = parts[2];
@@ -940,9 +955,12 @@ function buildEEConfig(params: {
     eeConfig.system_packages = params.systemPackages;
   }
   if (params.additionalBuildSteps.length > 0) {
-    eeConfig.additional_build_steps = buildStepsToObject(
+    const additionalBuildStepsObj = buildStepsToObject(
       params.additionalBuildSteps,
     );
+    if (Object.keys(additionalBuildStepsObj).length > 0) {
+      eeConfig.additional_build_steps = additionalBuildStepsObj;
+    }
   }
   if (params.galaxyServers.length > 0) {
     eeConfig.galaxy_servers = params.galaxyServers;
@@ -977,19 +995,27 @@ function buildEEConfig(params: {
  * Multiple steps with the same `stepType` are merged by concatenating their
  * command arrays in encounter order.
  *
+ * Steps with no non-blank commands are silently skipped — passing an empty
+ * or null-valued phase key to `ansible-builder` triggers a jsonschema
+ * ValidationError because the schema requires `string | string[]`, not `null`.
+ *
  * @param steps - Flat list of build step objects from the UI.
  * @returns An object keyed by step type (e.g. `prepend_base`) whose values
- *   are the concatenated command arrays for that phase.
+ *   are the concatenated, non-blank command arrays for that phase.
  */
 function buildStepsToObject(
   steps: AdditionalBuildStep[],
 ): Record<string, string[]> {
   const result: Record<string, string[]> = {};
   for (const step of steps) {
+    const nonBlankCommands = step.commands.filter(cmd => cmd.trim() !== '');
+    if (nonBlankCommands.length === 0) {
+      continue;
+    }
     if (!result[step.stepType]) {
       result[step.stepType] = [];
     }
-    result[step.stepType].push(...step.commands);
+    result[step.stepType].push(...nonBlankCommands);
   }
   return result;
 }
@@ -1015,9 +1041,10 @@ function canonicalizeEEDefinitionName(value: string): string {
   const withoutExtension = baseName.replace(/\.ya?ml$/i, '');
   const canonicalSlug = withoutExtension
     .toLowerCase()
-    .replaceAll(/[^a-z0-9-_]/g, '-')
+    .replaceAll(/[^a-z0-9\-_.]/g, '-')
     .replaceAll(/-+/g, '-')
-    .replaceAll(/(?:^-)|(?:-$)/g, '');
+    .replace(/^[-_.]+/, '')
+    .replace(/[-_.]+$/, '');
 
   if (!canonicalSlug) {
     throw new Error(
@@ -1119,6 +1146,14 @@ async function patchWorkflowEeDir(
   workspacePath: string,
   contextDirName: string,
 ): Promise<void> {
+  await patchGitHubWorkflowEeDir(workspacePath, contextDirName);
+  await patchGitLabCiEeDir(workspacePath, contextDirName);
+}
+
+async function patchGitHubWorkflowEeDir(
+  workspacePath: string,
+  contextDirName: string,
+): Promise<void> {
   const workflowPath = path.join(
     workspacePath,
     '.github',
@@ -1139,8 +1174,49 @@ async function patchWorkflowEeDir(
     `$1"${contextDirName}"`,
   );
 
+  // Avoid a greedy `.*` before `||` (super-linear backtracking risk): split
+  // into lines, identify the EE_DIR line with a simple anchored test, then do
+  // a narrow literal substitution only on that line.
+  const patchedWithEeDir = patched
+    .split('\n')
+    .map(line => {
+      if (!/^\s+EE_DIR:\s/.test(line)) {
+        return line;
+      }
+      return line.replace(/'\.'\s*(\}\})/, `'${contextDirName}' $1`);
+    })
+    .join('\n');
+
+  if (patchedWithEeDir !== content) {
+    await fs.writeFile(workflowPath, patchedWithEeDir);
+  }
+}
+
+async function patchGitLabCiEeDir(
+  workspacePath: string,
+  contextDirName: string,
+): Promise<void> {
+  const ciPath = path.join(workspacePath, '.gitlab-ci.yml');
+
+  let content: string;
+  try {
+    content = await fs.readFile(ciPath, 'utf-8');
+  } catch {
+    return;
+  }
+
+  const patched = content
+    .split('\n')
+    .map(line => {
+      if (!/^\s+EE_DIR:\s/.test(line)) {
+        return line;
+      }
+      return line.replace('"."', `"${contextDirName}"`);
+    })
+    .join('\n');
+
   if (patched !== content) {
-    await fs.writeFile(workflowPath, patched);
+    await fs.writeFile(ciPath, patched);
   }
 }
 

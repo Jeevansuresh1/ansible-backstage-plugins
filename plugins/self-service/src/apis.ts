@@ -62,12 +62,16 @@ export interface EEBuildResult {
   workflowId?: string;
   /** Link to the workflow run when returned */
   workflowUrl?: string;
+  /** GitLab pipeline ID when returned */
+  pipelineId?: string;
+  /** Link to the GitLab pipeline when returned */
+  pipelineUrl?: string;
   message?: string;
 }
 
-/** Sent as `X-Github-Token` so the catalog backend can call GitHub `workflow_dispatch`. */
 export interface EEBuildTriggerOptions {
-  githubToken: string;
+  scmToken: string;
+  scmProvider: 'github' | 'gitlab';
 }
 
 function workflowIdFromJsonValue(raw: unknown): string | undefined {
@@ -110,6 +114,8 @@ function userTextFromBuildJson(
 function parseExecutionEnvironmentBuildResponse(text: string): {
   workflowId?: string;
   workflowUrl?: string;
+  pipelineId?: string;
+  pipelineUrl?: string;
   message?: string;
 } {
   const trimmed = text.trim();
@@ -124,8 +130,14 @@ function parseExecutionEnvironmentBuildResponse(text: string): {
     const workflowUrl = workflowUrlFromJsonValue(
       data.workflowUrl ?? data.workflow_url,
     );
+    const pipelineId = workflowIdFromJsonValue(
+      data.pipelineId ?? data.pipeline_id,
+    );
+    const pipelineUrl = workflowUrlFromJsonValue(
+      data.pipelineUrl ?? data.pipeline_url,
+    );
     const message = userTextFromBuildJson(data);
-    return { workflowId, workflowUrl, message };
+    return { workflowId, workflowUrl, pipelineId, pipelineUrl, message };
   } catch {
     return { message: trimmed };
   }
@@ -165,30 +177,28 @@ export class AnsibleApiClient implements AnsibleApi {
     this.fetchApi = options.fetchApi;
   }
 
-  async syncTemplates(): Promise<boolean> {
+  private async triggerSync(endpoint: string): Promise<boolean> {
     const baseUrl = await this.discoveryApi.getBaseUrl('catalog');
     try {
-      const response = await this.fetchApi.fetch(
-        `${baseUrl}/ansible/sync/from-aap/job_templates`,
-      );
+      const response = await this.fetchApi.fetch(`${baseUrl}${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
       const data = await response.json();
-      return data;
+      return (
+        data.status === 'sync_started' || data.status === 'already_syncing'
+      );
     } catch {
       return false;
     }
   }
 
+  async syncTemplates(): Promise<boolean> {
+    return this.triggerSync('/ansible/sync/from-aap/job_templates');
+  }
+
   async syncOrgsUsersTeam(): Promise<boolean> {
-    const baseUrl = await this.discoveryApi.getBaseUrl('catalog');
-    try {
-      const response = await this.fetchApi.fetch(
-        `${baseUrl}/ansible/sync/from-aap/orgs_users_teams`,
-      );
-      const data = await response.json();
-      return data;
-    } catch {
-      return false;
-    }
+    return this.triggerSync('/ansible/sync/from-aap/orgs_users_teams');
   }
 
   async getSyncStatus(): Promise<{
@@ -240,15 +250,20 @@ export class EEBuildApiClient implements EEBuildApi {
     options: EEBuildTriggerOptions,
   ): Promise<EEBuildResult> {
     const baseUrl = await this.discoveryApi.getBaseUrl('catalog');
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (options.scmProvider === 'gitlab') {
+      headers['X-Gitlab-Token'] = options.scmToken;
+    } else {
+      headers['X-Github-Token'] = options.scmToken;
+    }
     try {
       const response = await this.fetchApi.fetch(
         `${baseUrl}/ansible/ee/build`,
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Github-Token': options.githubToken,
-          },
+          headers,
           body: JSON.stringify(request),
         },
       );
@@ -259,6 +274,8 @@ export class EEBuildApiClient implements EEBuildApi {
           accepted: true,
           workflowId: parsed.workflowId,
           workflowUrl: parsed.workflowUrl,
+          pipelineId: parsed.pipelineId,
+          pipelineUrl: parsed.pipelineUrl,
           message: parsed.message,
         };
       }

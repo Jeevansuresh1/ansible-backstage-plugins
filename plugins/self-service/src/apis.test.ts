@@ -14,13 +14,13 @@ describe('Ansible API module', () => {
     jest.clearAllMocks();
   });
 
-  it('AnsibleApiClient.syncTemplates returns true when fetch returns truthy json', async () => {
+  it('AnsibleApiClient.syncTemplates returns true when sync starts', async () => {
     const mockDiscovery = {
       getBaseUrl: jest.fn().mockResolvedValue('http://example.com'),
     };
     const mockFetch = {
       fetch: jest.fn().mockResolvedValue({
-        json: jest.fn().mockResolvedValue(true),
+        json: jest.fn().mockResolvedValue({ status: 'sync_started' }),
       }),
     };
 
@@ -34,7 +34,27 @@ describe('Ansible API module', () => {
     expect(mockDiscovery.getBaseUrl).toHaveBeenCalledWith('catalog');
     expect(mockFetch.fetch).toHaveBeenCalledWith(
       'http://example.com/ansible/sync/from-aap/job_templates',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } },
     );
+    expect(result).toBe(true);
+  });
+
+  it('AnsibleApiClient.syncTemplates returns true when already syncing', async () => {
+    const mockDiscovery = {
+      getBaseUrl: jest.fn().mockResolvedValue('http://example.com'),
+    };
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        json: jest.fn().mockResolvedValue({ status: 'already_syncing' }),
+      }),
+    };
+
+    const client = new AnsibleApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.syncTemplates();
     expect(result).toBe(true);
   });
 
@@ -56,17 +76,37 @@ describe('Ansible API module', () => {
     expect(mockDiscovery.getBaseUrl).toHaveBeenCalledWith('catalog');
     expect(mockFetch.fetch).toHaveBeenCalledWith(
       'http://example.com/ansible/sync/from-aap/job_templates',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } },
     );
     expect(result).toBe(false);
   });
 
-  it('AnsibleApiClient.syncOrgsUsersTeam returns true when fetch returns truthy json', async () => {
+  it('AnsibleApiClient.syncTemplates returns false when status is failed', async () => {
     const mockDiscovery = {
       getBaseUrl: jest.fn().mockResolvedValue('http://example.com'),
     };
     const mockFetch = {
       fetch: jest.fn().mockResolvedValue({
-        json: jest.fn().mockResolvedValue(true),
+        json: jest.fn().mockResolvedValue({ status: 'failed' }),
+      }),
+    };
+
+    const client = new AnsibleApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.syncTemplates();
+    expect(result).toBe(false);
+  });
+
+  it('AnsibleApiClient.syncOrgsUsersTeam returns true when sync starts', async () => {
+    const mockDiscovery = {
+      getBaseUrl: jest.fn().mockResolvedValue('http://example.com'),
+    };
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        json: jest.fn().mockResolvedValue({ status: 'sync_started' }),
       }),
     };
 
@@ -80,6 +120,7 @@ describe('Ansible API module', () => {
     expect(mockDiscovery.getBaseUrl).toHaveBeenCalledWith('catalog');
     expect(mockFetch.fetch).toHaveBeenCalledWith(
       'http://example.com/ansible/sync/from-aap/orgs_users_teams',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } },
     );
     expect(result).toBe(true);
   });
@@ -102,6 +143,7 @@ describe('Ansible API module', () => {
     expect(mockDiscovery.getBaseUrl).toHaveBeenCalledWith('catalog');
     expect(mockFetch.fetch).toHaveBeenCalledWith(
       'http://example.com/ansible/sync/from-aap/orgs_users_teams',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' } },
     );
     expect(result).toBe(false);
   });
@@ -181,9 +223,9 @@ describe('Ansible API module', () => {
     expect(instance).toBeInstanceOf(AnsibleApiClient);
 
     // the created instance should call through to provided discovery/fetch when used:
-    // stub fetch.json to return true for syncTemplates
+    // stub fetch.json to return sync_started for syncTemplates
     (mockFetch.fetch as jest.Mock).mockResolvedValue({
-      json: jest.fn().mockResolvedValue(true),
+      json: jest.fn().mockResolvedValue({ status: 'sync_started' }),
     });
     return instance.syncTemplates().then(result => {
       expect(result).toBe(true);
@@ -259,13 +301,15 @@ describe('EEBuildApiClient', () => {
         imageTag: '1',
         verifyTls: true,
       },
-      { githubToken: 'ghp_test_token' },
+      { scmToken: 'ghp_test_token', scmProvider: 'github' as const },
     );
 
     expect(result).toEqual({
       accepted: true,
       workflowId: 'run-123',
       workflowUrl: undefined,
+      pipelineId: undefined,
+      pipelineUrl: undefined,
       message: 'queued',
     });
     expect(mockFetch.fetch).toHaveBeenCalledWith(
@@ -303,13 +347,15 @@ describe('EEBuildApiClient', () => {
         imageTag: '1',
         verifyTls: true,
       },
-      { githubToken: 'tok' },
+      { scmToken: 'tok', scmProvider: 'github' as const },
     );
 
     expect(result).toEqual({
       accepted: true,
       workflowId: '999',
       workflowUrl: undefined,
+      pipelineId: undefined,
+      pipelineUrl: undefined,
       message: undefined,
     });
   });
@@ -340,13 +386,15 @@ describe('EEBuildApiClient', () => {
         imageTag: '1',
         verifyTls: true,
       },
-      { githubToken: 'tok' },
+      { scmToken: 'tok', scmProvider: 'github' as const },
     );
 
     expect(result).toEqual({
       accepted: true,
       workflowId: '42',
       workflowUrl: 'https://github.com/acme/repo/actions/runs/42',
+      pipelineId: undefined,
+      pipelineUrl: undefined,
       message: 'Build started',
     });
   });
@@ -373,13 +421,15 @@ describe('EEBuildApiClient', () => {
         imageTag: '1',
         verifyTls: true,
       },
-      { githubToken: 'tok' },
+      { scmToken: 'tok', scmProvider: 'github' as const },
     );
 
     expect(result).toEqual({
       accepted: true,
       workflowId: undefined,
       workflowUrl: undefined,
+      pipelineId: undefined,
+      pipelineUrl: undefined,
       message: 'ok',
     });
   });
@@ -405,13 +455,15 @@ describe('EEBuildApiClient', () => {
         imageTag: '1',
         verifyTls: true,
       },
-      { githubToken: 'tok' },
+      { scmToken: 'tok', scmProvider: 'github' as const },
     );
 
     expect(result).toEqual({
       accepted: true,
       workflowId: undefined,
       workflowUrl: undefined,
+      pipelineId: undefined,
+      pipelineUrl: undefined,
       message: undefined,
     });
   });
@@ -441,12 +493,144 @@ describe('EEBuildApiClient', () => {
         imageTag: '1',
         verifyTls: true,
       },
-      { githubToken: 'tok' },
+      { scmToken: 'tok', scmProvider: 'github' as const },
     );
 
     expect(result).toEqual({
       accepted: false,
       message: 'GitHub workflow_dispatch failed: invalid inputs',
+    });
+  });
+
+  it('sends X-Gitlab-Token header when scmProvider is gitlab', async () => {
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            message: 'Build started',
+            pipeline_id: 77,
+            pipeline_url: 'https://gitlab.com/org/repo/-/pipelines/77',
+          }),
+      }),
+    };
+    const client = new EEBuildApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.triggerBuild(
+      {
+        entityRef: 'component:default/ee1',
+        registryType: 'pah',
+        customRegistryUrl: 'https://r.example',
+        imageName: 'ns/ee',
+        imageTag: '1',
+        verifyTls: true,
+      },
+      { scmToken: 'gl-tok', scmProvider: 'gitlab' as const },
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      workflowId: undefined,
+      workflowUrl: undefined,
+      pipelineId: '77',
+      pipelineUrl: 'https://gitlab.com/org/repo/-/pipelines/77',
+      message: 'Build started',
+    });
+    const callHeaders = mockFetch.fetch.mock.calls[0][1].headers;
+    expect(callHeaders).toHaveProperty('X-Gitlab-Token', 'gl-tok');
+    expect(callHeaders).not.toHaveProperty('X-Github-Token');
+  });
+
+  it('does not send X-Gitlab-Token when scmProvider is github', async () => {
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        ok: true,
+        text: async () => JSON.stringify({ message: 'Build started' }),
+      }),
+    };
+    const client = new EEBuildApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    await client.triggerBuild(
+      {
+        entityRef: 'component:default/ee1',
+        registryType: 'pah',
+        customRegistryUrl: 'https://r.example',
+        imageName: 'ns/ee',
+        imageTag: '1',
+        verifyTls: true,
+      },
+      { scmToken: 'gh-tok', scmProvider: 'github' as const },
+    );
+
+    const callHeaders = mockFetch.fetch.mock.calls[0][1].headers;
+    expect(callHeaders).toHaveProperty('X-Github-Token', 'gh-tok');
+    expect(callHeaders).not.toHaveProperty('X-Gitlab-Token');
+  });
+
+  it('returns accepted:false with message on GitLab error response', async () => {
+    const mockFetch = {
+      fetch: jest.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        text: async () =>
+          JSON.stringify({
+            error: 'GitLab pipeline trigger failed: bad variables',
+          }),
+      }),
+    };
+    const client = new EEBuildApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.triggerBuild(
+      {
+        entityRef: 'component:default/ee1',
+        registryType: 'pah',
+        customRegistryUrl: 'https://r.example',
+        imageName: 'ns/ee',
+        imageTag: '1',
+        verifyTls: true,
+      },
+      { scmToken: 'gl-tok', scmProvider: 'gitlab' as const },
+    );
+
+    expect(result).toEqual({
+      accepted: false,
+      message: 'GitLab pipeline trigger failed: bad variables',
+    });
+  });
+
+  it('returns accepted:false when fetch throws for gitlab', async () => {
+    const mockFetch = {
+      fetch: jest.fn().mockRejectedValue(new Error('Network error')),
+    };
+    const client = new EEBuildApiClient({
+      discoveryApi: mockDiscovery as any,
+      fetchApi: mockFetch as any,
+    });
+
+    const result = await client.triggerBuild(
+      {
+        entityRef: 'component:default/ee1',
+        registryType: 'pah',
+        customRegistryUrl: 'https://r.example',
+        imageName: 'ns/ee',
+        imageTag: '1',
+        verifyTls: true,
+      },
+      { scmToken: 'gl-tok', scmProvider: 'gitlab' as const },
+    );
+
+    expect(result).toEqual({
+      accepted: false,
+      message: 'Error: Network error',
     });
   });
 });

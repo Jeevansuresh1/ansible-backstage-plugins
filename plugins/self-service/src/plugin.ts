@@ -9,6 +9,8 @@ import {
   eeRouteRef,
   collectionsRouteRef,
   gitRepositoriesRouteRef,
+  templatesRouteRef,
+  historyRouteRef,
 } from './routes';
 import { AAPApis, AapAuthApi, EEBuildApis } from './apis';
 
@@ -20,6 +22,8 @@ export const selfServicePlugin = createPlugin({
     ee: eeRouteRef,
     collections: collectionsRouteRef,
     gitRepositories: gitRepositoriesRouteRef,
+    templates: templatesRouteRef,
+    history: historyRouteRef,
   },
 });
 
@@ -40,6 +44,32 @@ export const LocationListener = selfServicePlugin.provide(
     component: {
       lazy: () =>
         import('./components/LocationListener').then(m => m.LocationListener),
+    },
+  }),
+);
+
+export const AppThemeFixer = selfServicePlugin.provide(
+  createComponentExtension({
+    name: 'AppThemeFixer',
+    component: {
+      lazy: () =>
+        import('./components/AppThemeFixer').then(m => m.AppThemeFixer),
+    },
+  }),
+);
+
+/**
+ * Custom logout button that revokes the AAP OAuth token,
+ * ends the AAP browser session, and signs out of Backstage.
+ *
+ * @public
+ */
+export const AAPLogoutButton = selfServicePlugin.provide(
+  createComponentExtension({
+    name: 'AAPLogoutButton',
+    component: {
+      lazy: () =>
+        import('./components/AAPLogoutButton').then(m => m.AAPLogoutButton),
     },
   }),
 );
@@ -73,6 +103,37 @@ export const CollectionsPage = selfServicePlugin.provide(
         m => m.CollectionsRoutesPage,
       ),
     mountPoint: collectionsRouteRef,
+  }),
+);
+
+/**
+ * Templates page component for mounting at /self-service
+ * Contains routing for all ansible.templates.view gated paths:
+ * catalog, catalog/:namespace/:templateName, and create/templates/:namespace/:templateName.
+ *
+ * @public
+ */
+export const TemplatesPage = selfServicePlugin.provide(
+  createRoutableExtension({
+    name: 'TemplatesPage',
+    component: () =>
+      import('./components/Home').then(m => m.TemplatesRoutesPage),
+    mountPoint: templatesRouteRef,
+  }),
+);
+
+/**
+ * History page component for mounting at /self-service/create/tasks
+ * Contains routing for the History (task list and task detail) section.
+ *
+ * @public
+ */
+export const HistoryPage = selfServicePlugin.provide(
+  createRoutableExtension({
+    name: 'HistoryPage',
+    component: () =>
+      import('./components/TaskList').then(m => m.HistoryRoutesPage),
+    mountPoint: historyRouteRef,
   }),
 );
 
@@ -139,6 +200,38 @@ export const GitRepositoriesSidebarItem = selfServicePlugin.provide(
         import('./components/SidebarItems').then(
           m => m.GitRepositoriesSidebarItem,
         ),
+    },
+  }),
+);
+
+/**
+ * A sidebar item that checks Templates permissions before rendering.
+ * Returns null if the user doesn't have permission, hiding the sidebar entry.
+ *
+ * @public
+ */
+export const TemplatesSidebarItem = selfServicePlugin.provide(
+  createComponentExtension({
+    name: 'TemplatesSidebarItem',
+    component: {
+      lazy: () =>
+        import('./components/SidebarItems').then(m => m.TemplatesSidebarItem),
+    },
+  }),
+);
+
+/**
+ * A sidebar item that checks History permissions before rendering.
+ * Returns null if the user doesn't have permission, hiding the sidebar entry.
+ *
+ * @public
+ */
+export const HistorySidebarItem = selfServicePlugin.provide(
+  createComponentExtension({
+    name: 'HistorySidebarItem',
+    component: {
+      lazy: () =>
+        import('./components/SidebarItems').then(m => m.HistorySidebarItem),
     },
   }),
 );
