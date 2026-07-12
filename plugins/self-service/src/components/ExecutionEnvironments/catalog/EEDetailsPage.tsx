@@ -1,56 +1,54 @@
-import {
-  Backdrop,
-  Box,
-  Tabs,
-  Tab,
-  Button,
-  CircularProgress,
-  Menu,
-  MenuItem,
-  ListItemIcon,
-  Typography,
-} from '@material-ui/core';
-import { makeStyles } from '@material-ui/core/styles';
-import ArrowDropDownIcon from '@material-ui/icons/ArrowDropDown';
-import BuildIcon from '@material-ui/icons/Build';
-import EditIcon from '@material-ui/icons/Edit';
-import OpenInNewIcon from '@material-ui/icons/OpenInNew';
-import DeleteIcon from '@material-ui/icons/Delete';
-import { useNavigate, useParams } from 'react-router-dom';
-import { useEffect, useState, useCallback, useMemo } from 'react';
-import {
-  catalogApiRef,
-  UnregisterEntityDialog,
-} from '@backstage/plugin-catalog-react';
+import { ANNOTATION_EDIT_URL, type Entity } from '@backstage/catalog-model';
 import {
   discoveryApiRef,
   fetchApiRef,
   useApi,
   useRouteRef,
 } from '@backstage/core-plugin-api';
-import { ANNOTATION_EDIT_URL, type Entity } from '@backstage/catalog-model';
-import { Header } from './Header';
-import { BreadcrumbsNavigation } from './BreadcrumbsNavigation';
-import { LinksCard } from './LinksCard';
-import { AboutCard } from './AboutCard';
-import { ReadmeCard } from './ReadmeCard';
-import { DefinedContentCard } from './DefinedContentCard';
-import { ResourcesCard } from './ResourcesCard';
-import { EntityNotFound } from './EntityNotFound';
-import { EEBuildDialog } from './EEBuildDialog';
+import { catalogApiRef } from '@backstage/plugin-catalog-react';
 import {
-  toEEDefinitionUrl,
-  downloadEntityAsTarArchive,
-  isEntityBuildable,
-} from './helpers';
-import { useEEBuildFlow } from './useEEBuildFlow';
+  Backdrop,
+  Box,
+  Button,
+  CircularProgress,
+  ListItemIcon,
+  Menu,
+  MenuItem,
+  Tab,
+  Tabs,
+  Typography,
+} from '@material-ui/core';
+import { makeStyles } from '@material-ui/core/styles';
+import ArrowDropDownIcon from '@material-ui/icons/ArrowDropDown';
+import BuildIcon from '@material-ui/icons/Build';
+import DeleteIcon from '@material-ui/icons/Delete';
+import EditIcon from '@material-ui/icons/Edit';
+import OpenInNewIcon from '@material-ui/icons/OpenInNew';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { rootRouteRef } from '../../../routes';
+import { parseEEDefinition } from '../../../utils/eeDefinitionUtils';
 import {
   fetchGitFileContentFromBackend,
   ScmIntegrationAuthError,
   type FetchGitFileOutcome,
 } from '../../common';
-import { parseEEDefinition } from '../../../utils/eeDefinitionUtils';
-import { rootRouteRef } from '../../../routes';
+import { UnregisterEntityDialog } from '../../UnregisterEntityDialog';
+import { AboutCard } from './AboutCard';
+import { BreadcrumbsNavigation } from './BreadcrumbsNavigation';
+import { DefinedContentCard } from './DefinedContentCard';
+import { EEBuildDialog } from './EEBuildDialog';
+import { EntityNotFound } from './EntityNotFound';
+import { Header } from './Header';
+import {
+  downloadEntityAsTarArchive,
+  isEntityBuildable,
+  toEEDefinitionUrl,
+} from './helpers';
+import { LinksCard } from './LinksCard';
+import { ReadmeCard } from './ReadmeCard';
+import { ResourcesCard } from './ResourcesCard';
+import { useEEBuildFlow } from './useEEBuildFlow';
 
 const useActionsMenuStyles = makeStyles(theme => ({
   actionsButton: {
@@ -164,7 +162,7 @@ export const EEDetailsPage: React.FC = () => {
     scmProvider,
     closeDialog,
   } = useEEBuildFlow();
-  const [entity, setEntity] = useState<any | null>(false);
+  const [entity, setEntity] = useState<Entity | null | undefined>(undefined);
   const [menuid, setMenuId] = useState<string>('');
   const [defaultReadme, setDefaultReadme] = useState<string>('');
   const [fetchedDefinition, setFetchedDefinition] = useState<string | null>(
@@ -177,15 +175,16 @@ export const EEDetailsPage: React.FC = () => {
   const [scmIntegrationAuthError, setScmIntegrationAuthError] = useState(false);
 
   const getOwnerName = useCallback(async () => {
-    if (!entity?.spec?.owner) return 'Unknown';
-    const ownerEntity = await catalogApi.getEntityByRef(entity?.spec?.owner);
-    // precedence: title >> name >> user reference >> unknown
-    return (
-      ownerEntity?.metadata?.title ??
-      ownerEntity?.metadata?.name ??
-      entity?.spec?.owner ??
-      'Unknown'
-    );
+    const owner = entity?.spec?.owner;
+    if (!owner || typeof owner !== 'string') return 'Unknown';
+    try {
+      const ownerEntity = await catalogApi.getEntityByRef(owner);
+      return (
+        ownerEntity?.metadata?.title ?? ownerEntity?.metadata?.name ?? owner
+      );
+    } catch {
+      return owner;
+    }
   }, [entity, catalogApi]);
 
   useEffect(() => {
@@ -316,7 +315,9 @@ export const EEDetailsPage: React.FC = () => {
         : Promise.resolve(null);
 
       const definitionFilePath = params.subdir
-        ? `${params.subdir}/${entity?.metadata?.name ?? 'execution-environment'}.yml`
+        ? `${params.subdir}/${
+            entity?.metadata?.name ?? 'execution-environment'
+          }.yml`
         : `${entity?.metadata?.name ?? 'execution-environment'}.yml`;
 
       const defPromise: Promise<FetchGitFileOutcome | null> = needDefinition
@@ -369,8 +370,7 @@ export const EEDetailsPage: React.FC = () => {
   /** URL to edit the EE definition file (e.g. test-2.yml), not catalog-info.yaml */
   const getDefinitionEditUrl = useCallback(() => {
     const editUrl = entity?.metadata?.annotations?.[ANNOTATION_EDIT_URL] as
-      | string
-      | undefined;
+      string | undefined;
     if (!editUrl) return null;
     const eeName = entity?.metadata?.name;
     if (!eeName) {
@@ -394,7 +394,10 @@ export const EEDetailsPage: React.FC = () => {
   };
 
   const parsedDefinition = useMemo(() => {
-    const fromSpec = parseEEDefinition(entity?.spec?.definition);
+    const rawDef = entity?.spec?.definition;
+    const fromSpec = parseEEDefinition(
+      typeof rawDef === 'string' ? rawDef : undefined,
+    );
     if (fromSpec) return fromSpec;
     return fetchedDefinition ? parseEEDefinition(fetchedDefinition) : null;
   }, [entity?.spec?.definition, fetchedDefinition]);
@@ -408,7 +411,7 @@ export const EEDetailsPage: React.FC = () => {
     : null;
 
   const handleDownloadArchive = () => {
-    downloadEntityAsTarArchive(entity);
+    if (entity) downloadEntityAsTarArchive(entity);
   };
 
   const handleRefresh = () => {
@@ -430,10 +433,7 @@ export const EEDetailsPage: React.FC = () => {
   };
 
   const isDownloadExperience =
-    entity &&
-    entity.metadata &&
-    entity.metadata.annotations &&
-    entity.metadata.annotations['ansible.io/download-experience']
+    entity?.metadata?.annotations?.['ansible.io/download-experience']
       ?.toString()
       .toLowerCase()
       .trim() === 'true';
@@ -574,7 +574,12 @@ export const EEDetailsPage: React.FC = () => {
                     {/* Left Column - README (stacks first on narrow) */}
                     <Box className={pageClasses.readmeWrapper}>
                       <ReadmeCard
-                        readmeContent={entity?.spec.readme || defaultReadme}
+                        readmeContent={
+                          typeof entity?.spec?.readme === 'string' &&
+                          entity.spec.readme.trim().length > 0
+                            ? entity.spec.readme
+                            : defaultReadme
+                        }
                       />
                     </Box>
 
@@ -605,7 +610,7 @@ export const EEDetailsPage: React.FC = () => {
                 )}
               </>
             ) : (
-              <> {entity !== false && <EntityNotFound />}</>
+              <> {entity !== undefined && <EntityNotFound />}</>
             )}
           </>
         </>

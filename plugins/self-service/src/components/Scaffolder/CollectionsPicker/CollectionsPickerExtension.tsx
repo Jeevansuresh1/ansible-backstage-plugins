@@ -103,8 +103,8 @@ export const CollectionsPickerExtension = ({
   const [collections, setCollections] = useState<CollectionItem[] | any[]>(
     formData || [],
   );
-  const setEditingIndex = useState<number | null>(null)[1];
-  const setFieldErrors = useState<Record<string, string>>({})[1];
+  const [_editingIndex, setEditingIndex] = useState<number | null>(null); // NOSONAR - state value intentionally unused; only setter is needed
+  const [_fieldErrors, setFieldErrors] = useState<Record<string, string>>({}); // NOSONAR - state value intentionally unused; only setter is needed
 
   // Autocomplete states
   const [availableCollections, setAvailableCollections] = useState<any[]>([]);
@@ -389,9 +389,7 @@ export const CollectionsPickerExtension = ({
     !selectedCollection?.trim() || !selectedSource?.trim() || disabled;
 
   const versionAutocompleteValue = useMemo(():
-    | VersionOption
-    | string
-    | null => {
+    VersionOption | string | null => {
     if (selectedVersion === null || selectedVersion === '') {
       return null;
     }
@@ -589,7 +587,7 @@ export const CollectionsPickerExtension = ({
                   key={chipKey}
                   onClick={() => !disabled && handleEditCollection(index)}
                   className={
-                    !disabled ? classes.collectionChipWrapper : undefined
+                    disabled ? undefined : classes.collectionChipWrapper
                   }
                   style={{ display: 'inline-block' }}
                 >

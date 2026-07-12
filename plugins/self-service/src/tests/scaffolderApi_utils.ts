@@ -13,9 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { ScaffolderApi } from '@backstage/plugin-scaffolder-react';
+import type { ScaffolderApi } from '@backstage/plugin-scaffolder-common';
+
+const AAP_REDACTED = '$encrypted$'; // NOSONAR — AAP's placeholder for redacted credential values, not a real password
 
 export const mockScaffolderApi: jest.Mocked<ScaffolderApi> = {
+  getTask: jest.fn().mockResolvedValue(undefined),
   getTemplateParameterSchema: jest.fn().mockResolvedValue({
     title: 'Create wizard use cases',
     description: 'Use this template to create actual wizard use case templates',
@@ -224,7 +227,7 @@ export const mockScaffolderApi: jest.Mocked<ScaffolderApi> = {
                   credential_type: 1,
                   managed: false,
                   inputs: {
-                    ssh_key_data: '$encrypted$',
+                    ssh_key_data: AAP_REDACTED,
                   },
                   kind: 'ssh',
                   cloud: false,
@@ -538,10 +541,10 @@ export const mockScaffolderApi: jest.Mocked<ScaffolderApi> = {
                   credential_type: 1,
                   managed: false,
                   inputs: {
-                    password: '$encrypted$',
+                    password: AAP_REDACTED,
                     username: 'cisco',
                     become_method: 'enable',
-                    become_password: '$encrypted$',
+                    become_password: AAP_REDACTED,
                   },
                   kind: 'ssh',
                   cloud: false,
@@ -636,7 +639,7 @@ export const mockScaffolderApi: jest.Mocked<ScaffolderApi> = {
                   credential_type: 1,
                   managed: false,
                   inputs: {
-                    password: '$encrypted$',
+                    password: AAP_REDACTED,
                     username: 'azureuser',
                   },
                   kind: 'ssh',
@@ -732,7 +735,7 @@ export const mockScaffolderApi: jest.Mocked<ScaffolderApi> = {
                   credential_type: 1,
                   managed: false,
                   inputs: {
-                    password: '$encrypted$',
+                    password: AAP_REDACTED,
                     username: 'azureuser',
                   },
                   kind: 'ssh',

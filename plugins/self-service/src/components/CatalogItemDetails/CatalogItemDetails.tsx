@@ -1,13 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useApi, useRouteRef } from '@backstage/core-plugin-api';
-import { useNavigate, useParams } from 'react-router-dom';
-import {
-  catalogApiRef,
-  EntityProvider,
-  UnregisterEntityDialog,
-} from '@backstage/plugin-catalog-react';
-import { Content, Header, Page } from '@backstage/core-components';
 import { Entity } from '@backstage/catalog-model';
+import { Content, Header, Page } from '@backstage/core-components';
+import { useApi, useRouteRef } from '@backstage/core-plugin-api';
+import { catalogApiRef, EntityProvider } from '@backstage/plugin-catalog-react';
 import {
   Box,
   Card,
@@ -19,7 +13,10 @@ import {
   Typography,
   useTheme,
 } from '@material-ui/core';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { rootRouteRef } from '../../routes';
+import { UnregisterEntityDialog } from '../UnregisterEntityDialog';
 import { TemplateActions } from './TemplateActions';
 
 const headerStyles = makeStyles(theme => ({
@@ -135,7 +132,7 @@ export const CatalogItemsDetails = () => {
         </Header>
         <UnregisterEntityDialog
           open={confirmationDialogOpen}
-          entity={task!}
+          entity={task}
           onConfirm={cleanUpAfterRemoval}
           onClose={() => setConfirmationDialogOpen(false)}
         />
@@ -164,8 +161,8 @@ export const CatalogItemsDetails = () => {
                           <Typography variant="h6" gutterBottom>
                             Links
                           </Typography>
-                          {task.metadata.links.map((link, index) => (
-                            <Box key={index} sx={{ marginBottom: 1 }}>
+                          {task.metadata.links.map(link => (
+                            <Box key={link.url} sx={{ marginBottom: 1 }}>
                               <Link
                                 href={link.url}
                                 target="_blank"
@@ -229,7 +226,9 @@ export const CatalogItemsDetails = () => {
                             >
                               Owner
                             </Typography>{' '}
-                            {String(task?.spec?.owner) || '/'}
+                            {typeof task?.spec?.owner === 'string'
+                              ? task.spec.owner
+                              : '/'}
                           </Typography>
                         </Grid>
                         <Grid item xs={12} lg={6}>
@@ -247,7 +246,9 @@ export const CatalogItemsDetails = () => {
                               Type
                             </Typography>{' '}
                             <span style={{ textTransform: 'capitalize' }}>
-                              {String(task?.spec?.type) || '/'}
+                              {typeof task?.spec?.type === 'string'
+                                ? task.spec.type
+                                : '/'}
                             </span>
                           </Typography>
                         </Grid>
@@ -265,12 +266,8 @@ export const CatalogItemsDetails = () => {
                             >
                               Tags
                             </Typography>
-                            {task?.metadata?.tags?.map((tag, index) => (
-                              <Chip
-                                label={tag}
-                                key={index}
-                                variant="outlined"
-                              />
+                            {task?.metadata?.tags?.map(tag => (
+                              <Chip label={tag} key={tag} variant="outlined" />
                             ))}
                           </Typography>
                         </Grid>

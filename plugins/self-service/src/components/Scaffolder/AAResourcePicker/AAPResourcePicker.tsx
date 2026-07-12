@@ -219,8 +219,7 @@ export const AAPResourcePicker = (props: ScaffolderRJSFFieldProps) => {
     schema.resource ??
     (
       uiSchema as
-        | { 'ui:options'?: { autocomplete?: { resource?: string } } }
-        | undefined
+        { 'ui:options'?: { autocomplete?: { resource?: string } } } | undefined
     )?.['ui:options']?.autocomplete?.resource ??
     '';
   const _idKey: string = idKey ?? 'id';
@@ -300,7 +299,7 @@ export const AAPResourcePicker = (props: ScaffolderRJSFFieldProps) => {
                 setSelected,
               });
             }
-            setAvailableResources(results as Record<string, unknown>[]);
+            setAvailableResources(results);
             setLoading(false);
             // Clear initial form data since we now have resources loaded
             setInitialFormData(null);
