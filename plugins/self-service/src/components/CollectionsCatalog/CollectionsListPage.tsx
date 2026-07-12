@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { Progress } from '@backstage/core-components';
 import {
   Box,
@@ -9,8 +9,10 @@ import {
   InputAdornment,
   Paper,
   TextField,
+  Snackbar,
   Typography,
 } from '@material-ui/core';
+import MuiAlert from '@material-ui/lab/Alert';
 import Autocomplete from '@material-ui/lab/Autocomplete';
 import SearchIcon from '@material-ui/icons/Search';
 import ClearIcon from '@material-ui/icons/Clear';
@@ -116,6 +118,13 @@ function collectionsTitleCountSuffix(
   if (!filterByRepositoryEntity && showNoFilterMatches) {
     return ` (0 of ${loadedEntityCount})`;
   }
+  if (
+    !filterByRepositoryEntity &&
+    loadedEntityCount > 0 &&
+    totalCount !== loadedEntityCount
+  ) {
+    return ` (${totalCount} of ${loadedEntityCount})`;
+  }
   return ` (${totalCount})`;
 }
 
@@ -167,6 +176,19 @@ export const CollectionsListPage = ({
     fetchApi,
     filterByRepositoryEntity,
   });
+
+  const [debugSnackbar, setDebugSnackbar] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!initialLoading) {
+      setDebugSnackbar(
+        `Page ${currentPage} fetched from catalog — ${totalCount} of ${loadedEntityCount} total`,
+      );
+      const timer = setTimeout(() => setDebugSnackbar(null), 4000);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [initialLoading, currentPage, totalCount, loadedEntityCount]);
 
   useEffect(() => {
     if (onSourcesStatusChange) {
@@ -438,6 +460,21 @@ export const CollectionsListPage = ({
           </CatalogFilterLayout>
         </Box>
       )}
+      <Snackbar
+        open={debugSnackbar !== null}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        onClose={() => setDebugSnackbar(null)}
+        style={{ bottom: '50%' }}
+      >
+        <MuiAlert
+          onClose={() => setDebugSnackbar(null)}
+          severity="info"
+          variant="filled"
+          elevation={6}
+        >
+          {debugSnackbar}
+        </MuiAlert>
+      </Snackbar>
     </div>
   );
 };
