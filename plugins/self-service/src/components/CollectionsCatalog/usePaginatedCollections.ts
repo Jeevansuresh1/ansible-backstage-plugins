@@ -1,16 +1,44 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Entity } from '@backstage/catalog-model';
 import { CatalogApi } from '@backstage/plugin-catalog-react';
 import { DiscoveryApi, FetchApi } from '@backstage/core-plugin-api';
 import { SyncStatusMap } from '../common';
-import { useCacheSubscription, usePagination } from '../common/cache';
 import {
+  getCollectionFullName,
+  compareVersions,
+  filterCollectionsByRepository,
   sortEntities,
   filterLatestVersions,
-  filterCollectionsByRepository,
 } from './utils';
 import { PAGE_SIZE } from './constants';
-import { collectionsCache, CollectionsCacheState } from './collectionsCache';
+import {
+  setCollectionsInvalidateCallback,
+  clearCollectionsInvalidateCallback,
+} from './collectionsInvalidation';
+
+const LIGHTWEIGHT_FIELDS = [
+  'kind',
+  'metadata.name',
+  'metadata.namespace',
+  'metadata.uid',
+  'metadata.annotations',
+  'metadata.tags',
+  'metadata.description',
+  'spec.type',
+  'spec.collection_namespace',
+  'spec.collection_name',
+  'spec.collection_version',
+  'spec.collection_full_name',
+];
+
+const DEDUP_INDEX_FIELDS = [
+  'metadata.name',
+  'metadata.annotations',
+  'spec.collection_full_name',
+  'spec.collection_version',
+];
+
+const INDEX_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export interface UsePaginatedCollectionsOptions {
   catalogApi: CatalogApi;
@@ -48,6 +76,108 @@ export interface UsePaginatedCollectionsResult {
   refresh: () => void;
 }
 
+interface IndexCache {
+  key: string;
+  dedupNames: string[];
+  totalUnique: number;
+  timestamp: number;
+}
+
+const BASE_FILTER: Record<string, string> = {
+  kind: 'Component',
+  'spec.type': 'ansible-collection',
+};
+
+function buildEntityFilter(
+  sourceFilter: string,
+  tagFilter: string,
+  sourceTypeMap: Map<string, 'pah' | 'scm'>,
+): Record<string, string | string[]> {
+  const filter: Record<string, string> = { ...BASE_FILTER };
+
+  if (sourceFilter !== 'All') {
+    const sourceType = sourceTypeMap.get(sourceFilter);
+    if (sourceType === 'pah') {
+      filter[
+        'metadata.annotations.ansible.io/collection-source-repository'
+      ] = sourceFilter;
+    } else {
+      filter['metadata.annotations.ansible.io/scm-host-name'] = sourceFilter;
+    }
+  }
+
+  if (tagFilter !== 'All') {
+    filter['metadata.tags'] = tagFilter;
+  }
+
+  return filter;
+}
+
+function buildRepoFilter(
+  repoEntity: Entity,
+): { filter: Record<string, string | string[]> } {
+  const repoSpec = (repoEntity.spec || {}) as {
+    repository_collections?: string[];
+  };
+  const names = (repoSpec.repository_collections ?? []).filter(
+    (n): n is string => typeof n === 'string',
+  );
+
+  if (names.length > 0) {
+    return {
+      filter: {
+        ...BASE_FILTER,
+        'metadata.name': names,
+      },
+    };
+  }
+
+  const ann = repoEntity.metadata?.annotations || {};
+  return {
+    filter: {
+      ...BASE_FILTER,
+      'metadata.annotations.ansible.io/scm-provider':
+        ann['ansible.io/scm-provider'] || '',
+      'metadata.annotations.ansible.io/scm-host':
+        ann['ansible.io/scm-host'] || '',
+      'metadata.annotations.ansible.io/scm-organization':
+        ann['ansible.io/scm-organization'] || '',
+      'metadata.annotations.ansible.io/scm-repository':
+        ann['ansible.io/scm-repository'] || '',
+    },
+  };
+}
+
+function dedupIndexEntities(entities: Entity[]): string[] {
+  const grouped = new Map<string, { name: string; version: string }>();
+
+  for (const entity of entities) {
+    const fullName = getCollectionFullName(entity);
+    const sourceId =
+      entity.metadata?.annotations?.['ansible.io/discovery-source-id'] ||
+      'unknown';
+    const key = `${fullName}::${sourceId}`;
+    const version =
+      typeof entity.spec?.collection_version === 'string'
+        ? entity.spec.collection_version
+        : '0.0.0';
+
+    const existing = grouped.get(key);
+    if (!existing || compareVersions(version, existing.version) > 0) {
+      grouped.set(key, { name: entity.metadata.name, version });
+    }
+  }
+
+  const entries = Array.from(grouped.entries());
+  entries.sort((a, b) => {
+    const fullNameA = a[0].split('::')[0];
+    const fullNameB = b[0].split('::')[0];
+    return fullNameA.localeCompare(fullNameB);
+  });
+
+  return entries.map(([, v]) => v.name);
+}
+
 export function usePaginatedCollections({
   catalogApi,
   discoveryApi,
@@ -65,21 +195,89 @@ export function usePaginatedCollections({
     boolean | null
   >(null);
 
-  const hydrateFromCache = useCallback((state: CollectionsCacheState) => {
-    setAllSources(state.allSources);
-    setAllTags(state.allTags);
-    setSyncStatusMap(state.syncStatusMap);
-    setHasConfiguredSources(state.hasConfiguredSources);
+  const [entities, setEntities] = useState<Entity[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalUnfilteredCount, setTotalUnfilteredCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const sourceTypeMapRef = useRef<Map<string, 'pah' | 'scm'>>(new Map());
+  const indexCacheRef = useRef<IndexCache | null>(null);
+  const isMountedRef = useRef(true);
+  const fetchGenRef = useRef(0);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
-  const { allEntities, initialLoading, loadingMore, error, isMountedRef } =
-    useCacheSubscription<CollectionsCacheState>({
-      cache: collectionsCache,
-      catalogApi,
-      onCacheUpdate: hydrateFromCache,
-      onInitialData: hydrateFromCache,
-      fallbackErrorMessage: 'Failed to fetch collections',
-    });
+  const fetchFacets = useCallback(async () => {
+    try {
+      const [tagFacets, pahFacets, scmFacets, unfilteredResult] =
+        await Promise.all([
+          catalogApi.getEntityFacets({
+            filter: BASE_FILTER,
+            facets: ['metadata.tags'],
+          }),
+          catalogApi.getEntityFacets({
+            filter: {
+              ...BASE_FILTER,
+              'metadata.annotations.ansible.io/collection-source': 'pah',
+            },
+            facets: [
+              'metadata.annotations.ansible.io/collection-source-repository',
+            ],
+          }),
+          catalogApi.getEntityFacets({
+            filter: {
+              ...BASE_FILTER,
+              'metadata.annotations.ansible.io/collection-source': 'scm',
+            },
+            facets: ['metadata.annotations.ansible.io/scm-host-name'],
+          }),
+          catalogApi.queryEntities({
+            filter: BASE_FILTER,
+            fields: ['metadata.name'],
+            limit: 1,
+          }),
+        ]);
+
+      if (!isMountedRef.current) return;
+
+      setTotalUnfilteredCount(unfilteredResult.totalItems);
+
+      const tags = (tagFacets.facets['metadata.tags'] || [])
+        .map(f => f.value)
+        .filter(t => t !== 'ansible-collection')
+        .sort((a, b) => a.localeCompare(b));
+      setAllTags(['All', ...tags]);
+
+      const pahSources = (
+        pahFacets.facets[
+          'metadata.annotations.ansible.io/collection-source-repository'
+        ] || []
+      ).map(f => f.value);
+
+      const scmSources = (
+        scmFacets.facets['metadata.annotations.ansible.io/scm-host-name'] || []
+      ).map(f => f.value);
+
+      const newSourceTypeMap = new Map<string, 'pah' | 'scm'>();
+      for (const s of pahSources) newSourceTypeMap.set(s, 'pah');
+      for (const s of scmSources) newSourceTypeMap.set(s, 'scm');
+      sourceTypeMapRef.current = newSourceTypeMap;
+
+      const combinedSources = [...pahSources, ...scmSources].sort((a, b) =>
+        a.localeCompare(b),
+      );
+      setAllSources(['All', ...combinedSources]);
+    } catch {
+      // facets failed — dropdowns will show only 'All'
+    }
+  }, [catalogApi]);
 
   const fetchSyncStatus = useCallback(async () => {
     try {
@@ -91,7 +289,6 @@ export function usePaginatedCollections({
       if (!response.ok) {
         if (isMountedRef.current) {
           setHasConfiguredSources(false);
-          collectionsCache.updateSyncStatus({}, false);
         }
         return;
       }
@@ -116,110 +313,247 @@ export function usePaginatedCollections({
       if (isMountedRef.current) {
         setSyncStatusMap(statusMap);
         setHasConfiguredSources(providers.length > 0);
-        collectionsCache.updateSyncStatus(statusMap, providers.length > 0);
       }
     } catch {
       if (isMountedRef.current) {
         setHasConfiguredSources(false);
-        collectionsCache.updateSyncStatus({}, false);
       }
     }
-  }, [discoveryApi, fetchApi, isMountedRef]);
+  }, [discoveryApi, fetchApi]);
 
   useEffect(() => {
+    fetchFacets();
     fetchSyncStatus();
-  }, [fetchSyncStatus]);
+  }, [fetchFacets, fetchSyncStatus]);
 
-  const filteredEntities = useMemo(() => {
-    if (filterByRepositoryEntity) {
-      const repoFiltered = filterCollectionsByRepository(
-        allEntities,
-        filterByRepositoryEntity,
-      );
-      return sortEntities(repoFiltered);
-    }
+  const fetchPage = useCallback(
+    async (page: number) => {
+      fetchGenRef.current += 1;
+      const gen = fetchGenRef.current;
 
-    const searchLower = searchQuery.toLowerCase().trim();
-    let filtered = allEntities.filter(entity => {
-      const annotations = entity.metadata?.annotations || {};
-      const collectionSource = annotations['ansible.io/collection-source'];
+      setInitialLoading(true);
+      setError(null);
 
-      const entitySource =
-        collectionSource === 'pah'
-          ? annotations['ansible.io/collection-source-repository'] || ''
-          : annotations['ansible.io/scm-host-name'] || '';
+      try {
+        if (filterByRepositoryEntity) {
+          // Repository detail page: fetch all matching, client-side paginate
+          const { filter } = buildRepoFilter(filterByRepositoryEntity);
+          const result = await catalogApi.queryEntities({
+            filter,
+            fields: LIGHTWEIGHT_FIELDS,
+            limit: 1000,
+            orderFields: [{ field: 'metadata.name', order: 'asc' }],
+          });
 
-      const matchesSource =
-        sourceFilter === 'All' || entitySource === sourceFilter;
-      const matchesTag =
-        tagFilter === 'All' || entity.metadata?.tags?.includes(tagFilter);
+          if (!isMountedRef.current || gen !== fetchGenRef.current) return;
 
-      const matchesSearch =
-        !searchLower ||
-        entity.metadata?.name?.toLowerCase()?.includes(searchLower) ||
-        (entity.spec?.collection_namespace as string | undefined)
-          ?.toLowerCase()
-          ?.includes(searchLower) ||
-        entity.metadata?.description?.toLowerCase()?.includes(searchLower) ||
-        entity.metadata?.tags?.some((tag: string) =>
-          tag.toLowerCase().includes(searchLower),
+          const filtered = filterCollectionsByRepository(
+            result.items,
+            filterByRepositoryEntity,
+          );
+          const sorted = sortEntities(filtered);
+          const start = (page - 1) * PAGE_SIZE;
+          const pageEntities = sorted.slice(start, start + PAGE_SIZE);
+
+          setEntities(pageEntities);
+          setTotalCount(sorted.length);
+          setCurrentPage(page);
+          setInitialLoading(false);
+          return;
+        }
+
+        if (!showLatestOnly) {
+          // MODE A: Direct per-page fetch — one queryEntities call
+          const filter = buildEntityFilter(
+            sourceFilter,
+            tagFilter,
+            sourceTypeMapRef.current,
+          );
+          const result = await catalogApi.queryEntities({
+            filter,
+            fields: LIGHTWEIGHT_FIELDS,
+            limit: PAGE_SIZE,
+            offset: (page - 1) * PAGE_SIZE,
+            orderFields: [{ field: 'metadata.name', order: 'asc' }],
+            ...(searchQuery.trim()
+              ? { fullTextFilter: { term: searchQuery.trim() } }
+              : {}),
+          });
+
+          if (!isMountedRef.current || gen !== fetchGenRef.current) return;
+
+          setEntities(result.items);
+          setTotalCount(result.totalItems);
+          setCurrentPage(page);
+          setInitialLoading(false);
+        } else {
+          // MODE B: Lightweight index for dedup, then fetch page by name array
+          const cacheKey = `${sourceFilter}::${tagFilter}::${searchQuery}`;
+          const cached = indexCacheRef.current;
+          let dedupNames: string[];
+          let totalUnique: number;
+
+          if (
+            cached &&
+            cached.key === cacheKey &&
+            Date.now() - cached.timestamp < INDEX_CACHE_TTL_MS
+          ) {
+            dedupNames = cached.dedupNames;
+            totalUnique = cached.totalUnique;
+          } else {
+            // Fetch lightweight index — just enough fields for dedup
+            const filter = buildEntityFilter(
+              sourceFilter,
+              tagFilter,
+              sourceTypeMapRef.current,
+            );
+            const indexResult = await catalogApi.queryEntities({
+              filter,
+              fields: DEDUP_INDEX_FIELDS,
+              limit: 5000,
+              orderFields: [{ field: 'metadata.name', order: 'asc' }],
+              ...(searchQuery.trim()
+                ? { fullTextFilter: { term: searchQuery.trim() } }
+                : {}),
+            });
+
+            if (!isMountedRef.current || gen !== fetchGenRef.current) return;
+
+            dedupNames = dedupIndexEntities(indexResult.items);
+            totalUnique = dedupNames.length;
+
+            indexCacheRef.current = {
+              key: cacheKey,
+              dedupNames,
+              totalUnique,
+              timestamp: Date.now(),
+            };
+          }
+
+          if (totalUnique === 0) {
+            setEntities([]);
+            setTotalCount(0);
+            setCurrentPage(page);
+            setInitialLoading(false);
+            return;
+          }
+
+          // Fetch the specific 12 entities for this page
+          const start = (page - 1) * PAGE_SIZE;
+          const pageNames = dedupNames.slice(start, start + PAGE_SIZE);
+
+          if (pageNames.length === 0) {
+            setEntities([]);
+            setTotalCount(totalUnique);
+            setCurrentPage(page);
+            setInitialLoading(false);
+            return;
+          }
+
+          const pageResult = await catalogApi.queryEntities({
+            filter: {
+              ...BASE_FILTER,
+              'metadata.name': pageNames,
+            },
+            fields: LIGHTWEIGHT_FIELDS,
+            limit: pageNames.length,
+          });
+
+          if (!isMountedRef.current || gen !== fetchGenRef.current) return;
+
+          // Re-apply dedup + sort to the page results
+          const deduped = filterLatestVersions(pageResult.items);
+          const sorted = sortEntities(deduped);
+
+          setEntities(sorted);
+          setTotalCount(totalUnique);
+          setCurrentPage(page);
+          setInitialLoading(false);
+        }
+      } catch (err) {
+        if (!isMountedRef.current || gen !== fetchGenRef.current) return;
+        setError(
+          err instanceof Error ? err.message : 'Failed to fetch collections',
         );
-
-      return matchesSource && matchesTag && matchesSearch;
-    });
-
-    if (showLatestOnly) {
-      filtered = filterLatestVersions(filtered);
-    }
-
-    return sortEntities(filtered);
-  }, [
-    filterByRepositoryEntity,
-    sourceFilter,
-    tagFilter,
-    searchQuery,
-    allEntities,
-    showLatestOnly,
-  ]);
-
-  const pagination = usePagination({
-    totalItems: filteredEntities.length,
-    pageSize: PAGE_SIZE,
-    resetDeps: [
+        setInitialLoading(false);
+      }
+    },
+    [
+      catalogApi,
       sourceFilter,
       tagFilter,
       searchQuery,
       showLatestOnly,
       filterByRepositoryEntity,
     ],
-  });
-
-  const paginatedEntities = useMemo(
-    () => filteredEntities.slice(pagination.startIndex, pagination.endIndex),
-    [filteredEntities, pagination.startIndex, pagination.endIndex],
   );
 
+  // Reset to page 1 and fetch when filters/search/mode changes
+  useEffect(() => {
+    indexCacheRef.current = null;
+    setCurrentPage(1);
+    fetchPage(1);
+  }, [fetchPage]);
+
+  // Register invalidation callback
+  useEffect(() => {
+    setCollectionsInvalidateCallback(() => {
+      indexCacheRef.current = null;
+      fetchPage(currentPage);
+      fetchFacets();
+    });
+    return () => {
+      clearCollectionsInvalidateCallback();
+    };
+  }, [fetchPage, currentPage, fetchFacets]);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const hasNextPage = currentPage < totalPages;
+  const hasPrevPage = currentPage > 1;
+
+  const goToPage = useCallback(
+    (page: number) => {
+      const clamped = Math.max(1, Math.min(page, totalPages));
+      fetchPage(clamped);
+    },
+    [fetchPage, totalPages],
+  );
+
+  const nextPage = useCallback(() => {
+    if (hasNextPage) {
+      fetchPage(currentPage + 1);
+    }
+  }, [hasNextPage, currentPage, fetchPage]);
+
+  const prevPage = useCallback(() => {
+    if (hasPrevPage) {
+      fetchPage(currentPage - 1);
+    }
+  }, [hasPrevPage, currentPage, fetchPage]);
+
   const refresh = useCallback(() => {
-    setAllSources(['All']);
-    setAllTags(['All']);
-    collectionsCache.invalidateFetchedData();
+    indexCacheRef.current = null;
+    fetchPage(1);
+    fetchFacets();
     fetchSyncStatus();
-  }, [fetchSyncStatus]);
+  }, [fetchPage, fetchFacets, fetchSyncStatus]);
+
+  const loadedEntityCount = totalUnfilteredCount;
 
   return {
-    entities: paginatedEntities,
-    loadedEntityCount: allEntities.length,
-    totalCount: filteredEntities.length,
+    entities,
+    loadedEntityCount,
+    totalCount,
     initialLoading,
-    loadingMore,
+    loadingMore: false,
     error,
-    currentPage: pagination.currentPage,
-    totalPages: pagination.totalPages,
-    hasNextPage: pagination.hasNextPage,
-    hasPrevPage: pagination.hasPrevPage,
-    goToPage: pagination.goToPage,
-    nextPage: pagination.nextPage,
-    prevPage: pagination.prevPage,
+    currentPage,
+    totalPages,
+    hasNextPage,
+    hasPrevPage,
+    goToPage,
+    nextPage,
+    prevPage,
     syncStatusMap,
     hasConfiguredSources,
     allSources,

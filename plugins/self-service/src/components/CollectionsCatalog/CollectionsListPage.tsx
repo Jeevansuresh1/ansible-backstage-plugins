@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { Progress } from '@backstage/core-components';
 import {
   Box,
@@ -7,10 +7,15 @@ import {
   FormControlLabel,
   IconButton,
   InputAdornment,
+  List,
+  ListItem,
+  ListItemText,
   Paper,
+  Snackbar,
   TextField,
   Typography,
 } from '@material-ui/core';
+import MuiAlert from '@material-ui/lab/Alert';
 import Autocomplete from '@material-ui/lab/Autocomplete';
 import SearchIcon from '@material-ui/icons/Search';
 import ClearIcon from '@material-ui/icons/Clear';
@@ -18,12 +23,7 @@ import NavigateBeforeIcon from '@material-ui/icons/NavigateBefore';
 import NavigateNextIcon from '@material-ui/icons/NavigateNext';
 import {
   CatalogFilterLayout,
-  EntityKindFilter,
-  EntityListProvider,
-  EntityTypeFilter,
-  UserListPicker,
   catalogApiRef,
-  useEntityList,
   useStarredEntities,
 } from '@backstage/plugin-catalog-react';
 import {
@@ -41,20 +41,6 @@ import { PAGE_SIZE } from './constants';
 import { filterLatestVersions, sortEntities } from './utils';
 import { CollectionCard } from './CollectionCard';
 import { usePaginatedCollections } from './usePaginatedCollections';
-
-export const CollectionsTypeFilter = () => {
-  const { filters, updateFilters } = useEntityList();
-  useEffect(() => {
-    if (!filters.kind || !filters.type) {
-      updateFilters(prev => ({
-        ...prev,
-        kind: new EntityKindFilter('Component', 'Component'),
-        type: new EntityTypeFilter('ansible-collection'),
-      }));
-    }
-  }, [filters.kind, filters.type, updateFilters]);
-  return null;
-};
 
 interface EmptyStateWrapperProps {
   filterByRepositoryEntity: boolean;
@@ -116,6 +102,13 @@ function collectionsTitleCountSuffix(
   if (!filterByRepositoryEntity && showNoFilterMatches) {
     return ` (0 of ${loadedEntityCount})`;
   }
+  if (
+    !filterByRepositoryEntity &&
+    loadedEntityCount > 0 &&
+    totalCount !== loadedEntityCount
+  ) {
+    return ` (${totalCount} of ${loadedEntityCount})`;
+  }
   return ` (${totalCount})`;
 }
 
@@ -134,7 +127,8 @@ export const CollectionsListPage = ({
   const fetchApi = useApi(fetchApiRef);
   const navigate = useNavigate();
   const { isStarredEntity, toggleStarredEntity } = useStarredEntities();
-  const { filters } = useEntityList();
+  const [userFilter, setUserFilter] = useState<'all' | 'starred'>('all');
+  const [debugSnackbar, setDebugSnackbar] = useState<string | null>(null);
 
   const {
     entities: paginatedEntities,
@@ -174,10 +168,22 @@ export const CollectionsListPage = ({
     }
   }, [hasConfiguredSources, onSourcesStatusChange]);
 
+  // Debug snackbar: show when page data is fetched from catalog
+  useEffect(() => {
+    if (!initialLoading) {
+      setDebugSnackbar(
+        `Page ${currentPage} fetched from catalog — ${totalCount} of ${loadedEntityCount} total`,
+      );
+      const timer = setTimeout(() => setDebugSnackbar(null), 4000);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [initialLoading, currentPage, totalCount, loadedEntityCount]);
+
   const displayedEntities = (() => {
     if (filterByRepositoryEntity) return paginatedEntities;
 
-    if (filters.user?.value === 'starred') {
+    if (userFilter === 'starred') {
       let starred = paginatedEntities.filter(e => isStarredEntity(e));
       if (showLatestOnly) {
         starred = filterLatestVersions(starred);
@@ -248,7 +254,6 @@ export const CollectionsListPage = ({
 
   return (
     <div style={{ flexDirection: 'column', width: '100%' }}>
-      <CollectionsTypeFilter />
       {showCatalogEmptyState ? (
         <EmptyStateWrapper
           filterByRepositoryEntity={!!filterByRepositoryEntity}
@@ -297,7 +302,39 @@ export const CollectionsListPage = ({
                     ) : null,
                   }}
                 />
-                <UserListPicker availableFilters={['starred', 'all']} />
+                <Typography
+                  style={{
+                    marginTop: 16,
+                    fontWeight: 600,
+                    fontSize: '0.875rem',
+                  }}
+                >
+                  Personal
+                </Typography>
+                <Paper className={classes.paper}>
+                  <List dense disablePadding>
+                    <ListItem
+                      button
+                      selected={userFilter === 'starred'}
+                      onClick={() =>
+                        setUserFilter(prev =>
+                          prev === 'starred' ? 'all' : 'starred',
+                        )
+                      }
+                      data-testid="starred-filter"
+                    >
+                      <ListItemText primary="Starred" />
+                    </ListItem>
+                    <ListItem
+                      button
+                      selected={userFilter === 'all'}
+                      onClick={() => setUserFilter('all')}
+                      data-testid="all-filter"
+                    >
+                      <ListItemText primary="All" />
+                    </ListItem>
+                  </List>
+                </Paper>
 
                 <Typography
                   style={{
@@ -438,6 +475,21 @@ export const CollectionsListPage = ({
           </CatalogFilterLayout>
         </Box>
       )}
+      <Snackbar
+        open={debugSnackbar !== null}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        onClose={() => setDebugSnackbar(null)}
+        style={{ bottom: '50%' }}
+      >
+        <MuiAlert
+          elevation={6}
+          variant="filled"
+          severity="info"
+          onClose={() => setDebugSnackbar(null)}
+        >
+          {debugSnackbar}
+        </MuiAlert>
+      </Snackbar>
     </div>
   );
 };
@@ -464,16 +516,14 @@ export const CollectionsContent = ({
   return (
     <Box display="flex" justifyContent="space-between" width="100%">
       <Box className={classes.flex} width="100%">
-        <EntityListProvider>
-          <CollectionsListPage
-            onSyncClick={onSyncClick}
-            onSourcesStatusChange={onSourcesStatusChange}
-            syncDisabled={syncDisabled}
-            syncDisabledReason={syncDisabledReason}
-            syncInProgress={syncInProgress}
-            syncProgress={syncProgress}
-          />
-        </EntityListProvider>
+        <CollectionsListPage
+          onSyncClick={onSyncClick}
+          onSourcesStatusChange={onSourcesStatusChange}
+          syncDisabled={syncDisabled}
+          syncDisabledReason={syncDisabledReason}
+          syncInProgress={syncInProgress}
+          syncProgress={syncProgress}
+        />
       </Box>
     </Box>
   );
