@@ -3725,7 +3725,7 @@ describe('AAPClient', () => {
         mockFetch.mockRejectedValue(new Error('Network error'));
 
         await expect(client.fetchProfile('test-token')).rejects.toThrow(
-          'Failed to retrieve profile data from RH AAP',
+          'Network error while fetching profile from RH AAP',
         );
       });
 
@@ -3738,7 +3738,7 @@ describe('AAPClient', () => {
         mockFetch.mockResolvedValue(mockResponse);
 
         await expect(client.fetchProfile('test-token')).rejects.toThrow(
-          'Failed to retrieve profile data from RH AAP',
+          'AAP session expired or token revoked',
         );
       });
 
